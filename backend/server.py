@@ -3,7 +3,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -67,6 +67,42 @@ def update_config(req: AccountConfigRequest):
 @app.get("/api/status")
 def get_status():
     return latest_evaluation
+
+@app.post("/api/webhook")
+async def tradingview_webhook(req: Request):
+    try:
+        body_bytes = await req.body()
+        body_str = body_bytes.decode("utf-8")
+        data = {}
+        try:
+            data = json.loads(body_str)
+        except Exception:
+            # Parse key-values or raw number from string
+            import re
+            p_match = re.search(r'([0-9]+\.?[0-9]*)', body_str)
+            if p_match:
+                data["price"] = float(p_match.group(1))
+            if "gold" in body_str.lower() or "xau" in body_str.lower():
+                data["symbol"] = "GOLD"
+            else:
+                data["symbol"] = "NAS100"
+
+        symbol = data.get("symbol", "NAS100").upper()
+        if "US100" in symbol or "NAS" in symbol or "NDX" in symbol:
+            symbol = "NAS100"
+        elif "GOLD" in symbol or "XAU" in symbol:
+            symbol = "GOLD"
+
+        price = float(data.get("price", 0.0))
+        high = float(data.get("high")) if "high" in data else None
+        low = float(data.get("low")) if "low" in data else None
+
+        if price > 0:
+            market_data_provider.update_live_price(symbol, price, high, low)
+            return {"status": "success", "symbol": symbol, "price": price}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    return {"status": "ignored"}
 
 # Serve Web App Manifest & Service Worker
 FRONTEND_DIR = BASE_DIR / "frontend"
