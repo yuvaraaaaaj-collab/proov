@@ -65,9 +65,9 @@ class MarketDataProvider:
             current_price = override.get("price", current_price)
             if c_1m:
                 c_1m[-1]['close'] = current_price
-                if 'high' in override and override['high'] > c_1m[-1]['high']:
+                if override.get('high') is not None and override['high'] > c_1m[-1]['high']:
                     c_1m[-1]['high'] = override['high']
-                if 'low' in override and override['low'] < c_1m[-1]['low']:
+                if override.get('low') is not None and override['low'] < c_1m[-1]['low']:
                     c_1m[-1]['low'] = override['low']
         
         return {
