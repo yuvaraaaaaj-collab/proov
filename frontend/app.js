@@ -222,6 +222,37 @@ Cancel If: ${lastAlertTicket['Cancel If']}
   });
 }
 
+// Load Embedded TradingView Live Chart Widget (Direct Capital.com Stream)
+function loadTradingViewWidget(symbol) {
+  const container = document.getElementById('tradingview_chart_container');
+  if (!container) return;
+  container.innerHTML = '';
+  
+  const tvSymbol = (symbol === 'GOLD') ? 'CAPITALCOM:GOLD' : 'CAPITALCOM:US100';
+  const titleEl = document.getElementById('chart-broker-title');
+  if (titleEl) {
+    titleEl.textContent = (symbol === 'GOLD') ? 'Capital.com Gold Live Chart (1M)' : 'Capital.com US 100 Live Chart (1M)';
+  }
+
+  if (typeof TradingView !== 'undefined') {
+    new TradingView.widget({
+      "autosize": true,
+      "symbol": tvSymbol,
+      "interval": "1",
+      "timezone": "Etc/UTC",
+      "theme": "dark",
+      "style": "1",
+      "locale": "en",
+      "toolbar_bg": "#0f172a",
+      "enable_publishing": false,
+      "hide_top_toolbar": false,
+      "hide_legend": false,
+      "save_image": false,
+      "container_id": "tradingview_chart_container"
+    });
+  }
+}
+
 // Asset Switcher
 function switchSymbol(symbol) {
   currentSymbol = symbol;
@@ -239,6 +270,8 @@ function switchSymbol(symbol) {
     cardSymbol.textContent = 'GOLD (XAUUSD)';
   }
 
+  loadTradingViewWidget(symbol);
+
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ switch_symbol: symbol }));
   }
@@ -254,4 +287,5 @@ function switchStrategy(strategyId) {
 // Initialize on Load
 window.addEventListener('DOMContentLoaded', () => {
   connectWebSocket();
+  setTimeout(() => loadTradingViewWidget('NAS100'), 300);
 });
