@@ -23,7 +23,7 @@ app = FastAPI(title="Live Trading Strategy Scanner")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -78,6 +78,35 @@ def update_config(req: AccountConfigRequest):
 @app.get("/api/status")
 def get_status():
     return latest_evaluation
+
+@app.get("/api/price")
+@app.get("/api/webhook")
+async def get_price_update(price: float, symbol: str = "NAS100"):
+    sym = "NAS100" if ("100" in symbol or "nas" in symbol.lower()) else "GOLD"
+    market_data_provider.update_live_price(sym, price)
+    mdata = market_data_provider.get_market_data(sym)
+    mdata["current_price"] = price
+    eval_result = strategy_mgr.evaluate_active(mdata, account_config)
+    payload = {
+        "type": "MARKET_UPDATE",
+        "timestamp": time.time(),
+        "symbol": sym,
+        "current_price": price,
+        "strategy_id": strategy_mgr.get_active_strategy_id(),
+        "evaluation": eval_result,
+        "is_alert": eval_result.get("decision") not in ["Wait / No trade", None],
+        "account_config": account_config
+    }
+    global latest_evaluation
+    latest_evaluation = payload
+    if connected_clients:
+        msg_str = json.dumps(payload)
+        for client in list(connected_clients):
+            try:
+                await client.send_text(msg_str)
+            except Exception:
+                pass
+    return {"status": "success", "symbol": sym, "price": price}
 
 @app.post("/api/webhook")
 async def tradingview_webhook(req: Request):
