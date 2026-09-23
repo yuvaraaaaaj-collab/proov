@@ -16,7 +16,17 @@ sys.path.insert(0, str(BASE_DIR))
 from strategies.strategy_manager import StrategyManager
 from backend.market_data import MarketDataProvider
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(title="Live Trading Strategy Scanner")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # State & Providers
 strategy_mgr = StrategyManager()
