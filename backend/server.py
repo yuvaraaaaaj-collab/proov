@@ -82,6 +82,7 @@ def get_status():
 @app.get("/api/price")
 @app.get("/api/webhook")
 async def get_price_update(price: float, symbol: str = "NAS100"):
+    global latest_evaluation
     sym = "NAS100" if ("100" in symbol or "nas" in symbol.lower()) else "GOLD"
     market_data_provider.update_live_price(sym, price)
     mdata = market_data_provider.get_market_data(sym)
@@ -97,7 +98,6 @@ async def get_price_update(price: float, symbol: str = "NAS100"):
         "is_alert": eval_result.get("decision") not in ["Wait / No trade", None],
         "account_config": account_config
     }
-    global latest_evaluation
     latest_evaluation = payload
     if connected_clients:
         msg_str = json.dumps(payload)
@@ -110,6 +110,7 @@ async def get_price_update(price: float, symbol: str = "NAS100"):
 
 @app.post("/api/webhook")
 async def tradingview_webhook(req: Request):
+    global latest_evaluation
     try:
         body_bytes = await req.body()
         body_str = body_bytes.decode("utf-8")
