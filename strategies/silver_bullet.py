@@ -230,7 +230,7 @@ class ICTSilverBulletStrategy(BaseStrategy):
                                     "Projected Profit": f"+${proj_profit:.2f}",
                                     "R:R": f"1:{rr_ratio:.1f}",
                                     "Lot Size": f"{lot_size} Lots",
-                                    "Window": window_info["label"].split("-")[0].strip(),
+                                    "Window": window_info["label"].split(" - ")[0].strip(),
                                     "FVG Range": f"{round(fvg['bottom'], 1)} - {round(fvg['top'], 1)}",
                                     "Consistency Impact": f"Safe (< 15% Cap / ${account_config.get('balance', 1000)*0.15:.0f})",
                                     "Cancel If": f"Price trades through {round(stop_loss, 1)} before entry or window closes."
@@ -303,7 +303,7 @@ class ICTSilverBulletStrategy(BaseStrategy):
                                     "Projected Profit": f"+${proj_profit:.2f}",
                                     "R:R": f"1:{rr_ratio:.1f}",
                                     "Lot Size": f"{lot_size} Lots",
-                                    "Window": window_info["label"].split("-")[0].strip(),
+                                    "Window": window_info["label"].split(" - ")[0].strip(),
                                     "FVG Range": f"{round(fvg['bottom'], 1)} - {round(fvg['top'], 1)}",
                                     "Consistency Impact": f"Safe (< 15% Cap / ${account_config.get('balance', 1000)*0.15:.0f})",
                                     "Cancel If": f"Price trades through {round(stop_loss, 1)} before entry or window closes."
