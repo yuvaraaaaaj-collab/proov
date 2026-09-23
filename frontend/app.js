@@ -118,9 +118,9 @@ function renderMarketUpdate(data) {
   const checklist = evalData.checklist || {};
   const ticket = evalData.order_ticket;
 
-  // 1. Live Price
+  // 1. Live Price (if static element exists)
   const priceEl = document.getElementById('live-price');
-  if (currentPrice) {
+  if (priceEl && currentPrice) {
     priceEl.textContent = currentPrice.toFixed(currentSymbol === 'GOLD' ? 2 : 1);
   }
 
@@ -253,6 +253,37 @@ function loadTradingViewWidget(symbol) {
   }
 }
 
+// Load Embedded TradingView Single Quote Ticker Widget (Direct Capital.com Real-Time Stream)
+function loadSingleQuoteWidget(symbol) {
+  const container = document.getElementById('tradingview-quote-box');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const tvSymbol = (symbol === 'GOLD') ? 'CAPITALCOM:GOLD' : 'CAPITALCOM:US100';
+
+  const widgetWrapper = document.createElement('div');
+  widgetWrapper.className = 'tradingview-widget-container';
+  
+  const widgetDiv = document.createElement('div');
+  widgetDiv.className = 'tradingview-widget-container__widget';
+  widgetWrapper.appendChild(widgetDiv);
+
+  const script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-single-quote.js';
+  script.async = true;
+  script.innerHTML = JSON.stringify({
+    "symbol": tvSymbol,
+    "width": "100%",
+    "colorTheme": "dark",
+    "isTransparent": true,
+    "locale": "en"
+  });
+
+  widgetWrapper.appendChild(script);
+  container.appendChild(widgetWrapper);
+}
+
 // Asset Switcher
 function switchSymbol(symbol) {
   currentSymbol = symbol;
@@ -263,14 +294,15 @@ function switchSymbol(symbol) {
   if (symbol === 'NAS100') {
     btnNas.className = 'flex-1 py-1.5 text-xs font-semibold rounded-lg bg-cyan-600 text-white shadow transition-all';
     btnGold.className = 'flex-1 py-1.5 text-xs font-semibold rounded-lg text-slate-400 hover:text-white transition-all';
-    cardSymbol.textContent = 'NAS100 (US 100)';
+    cardSymbol.textContent = 'NAS100 (Capital.com)';
   } else {
     btnGold.className = 'flex-1 py-1.5 text-xs font-semibold rounded-lg bg-cyan-600 text-white shadow transition-all';
     btnNas.className = 'flex-1 py-1.5 text-xs font-semibold rounded-lg text-slate-400 hover:text-white transition-all';
-    cardSymbol.textContent = 'GOLD (XAUUSD)';
+    cardSymbol.textContent = 'GOLD (Capital.com)';
   }
 
   loadTradingViewWidget(symbol);
+  loadSingleQuoteWidget(symbol);
 
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ switch_symbol: symbol }));
@@ -287,5 +319,8 @@ function switchStrategy(strategyId) {
 // Initialize on Load
 window.addEventListener('DOMContentLoaded', () => {
   connectWebSocket();
-  setTimeout(() => loadTradingViewWidget('NAS100'), 300);
+  setTimeout(() => {
+    loadTradingViewWidget('NAS100');
+    loadSingleQuoteWidget('NAS100');
+  }, 300);
 });

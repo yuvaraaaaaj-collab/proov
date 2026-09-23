@@ -57,6 +57,10 @@ class MarketDataProvider:
         c_1m = self.fetch_ohlcv(ticker, "1m", "1d")
         htf = self._cache.get(cache_key, {"c_15m": [], "c_1h": []})
         
+        # Base broker offset for Capital.com quotes (vs cash index)
+        default_offset = 82.2 if symbol_key == "NAS100" else 0.0
+        broker_offset = self._cache.get(f"{symbol_key}_offset", default_offset)
+        
         current_price = c_1m[-1]['close'] if c_1m else 0.0
         
         # Check for webhook override & auto-calibrated live offset
@@ -68,19 +72,36 @@ class MarketDataProvider:
                 # Active tab stream: use exact price and calibrate broker offset
                 current_price = override.get("price", current_price)
                 if c_1m:
-                    self._cache[f"{symbol_key}_offset"] = current_price - c_1m[-1]['close']
+                    broker_offset = current_price - c_1m[-1]['close']
+                    self._cache[f"{symbol_key}_offset"] = broker_offset
             else:
-                # Tab closed: apply calibrated broker offset to live cloud feed so it NEVER freezes!
-                last_offset = self._cache.get(f"{symbol_key}_offset", 0.0)
-                current_price = round(current_price + last_offset, 1)
-            
+                current_price = round(current_price + broker_offset, 1)
+        else:
+            current_price = round(current_price + broker_offset, 1)
+
+        # Calibrate candle levels with broker offset so PDH/PDL and sweeps align with Capital.com
+        if broker_offset != 0.0:
             if c_1m:
                 c_1m[-1]['close'] = current_price
-                if override_age < 6:
-                    if override.get('high') is not None and override['high'] > c_1m[-1]['high']:
-                        c_1m[-1]['high'] = override['high']
-                    if override.get('low') is not None and override['low'] < c_1m[-1]['low']:
-                        c_1m[-1]['low'] = override['low']
+            calibrated_15m = []
+            for c in htf["c_15m"]:
+                calibrated_15m.append({
+                    **c,
+                    "open": round(c["open"] + broker_offset, 1),
+                    "high": round(c["high"] + broker_offset, 1),
+                    "low": round(c["low"] + broker_offset, 1),
+                    "close": round(c["close"] + broker_offset, 1),
+                })
+            calibrated_1h = []
+            for c in htf["c_1h"]:
+                calibrated_1h.append({
+                    **c,
+                    "open": round(c["open"] + broker_offset, 1),
+                    "high": round(c["high"] + broker_offset, 1),
+                    "low": round(c["low"] + broker_offset, 1),
+                    "close": round(c["close"] + broker_offset, 1),
+                })
+            htf = {"c_15m": calibrated_15m, "c_1h": calibrated_1h}
         
         return {
             "symbol_name": symbol_key,
