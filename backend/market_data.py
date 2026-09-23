@@ -59,16 +59,28 @@ class MarketDataProvider:
         
         current_price = c_1m[-1]['close'] if c_1m else 0.0
         
-        # Check for webhook override
+        # Check for webhook override & auto-calibrated live offset
         if symbol_key in self._cache.get("overrides", {}):
             override = self._cache["overrides"][symbol_key]
-            current_price = override.get("price", current_price)
+            override_age = now - override.get("updated_at", 0)
+            
+            if override_age < 6:
+                # Active tab stream: use exact price and calibrate broker offset
+                current_price = override.get("price", current_price)
+                if c_1m:
+                    self._cache[f"{symbol_key}_offset"] = current_price - c_1m[-1]['close']
+            else:
+                # Tab closed: apply calibrated broker offset to live cloud feed so it NEVER freezes!
+                last_offset = self._cache.get(f"{symbol_key}_offset", 0.0)
+                current_price = round(current_price + last_offset, 1)
+            
             if c_1m:
                 c_1m[-1]['close'] = current_price
-                if override.get('high') is not None and override['high'] > c_1m[-1]['high']:
-                    c_1m[-1]['high'] = override['high']
-                if override.get('low') is not None and override['low'] < c_1m[-1]['low']:
-                    c_1m[-1]['low'] = override['low']
+                if override_age < 6:
+                    if override.get('high') is not None and override['high'] > c_1m[-1]['high']:
+                        c_1m[-1]['high'] = override['high']
+                    if override.get('low') is not None and override['low'] < c_1m[-1]['low']:
+                        c_1m[-1]['low'] = override['low']
         
         return {
             "symbol_name": symbol_key,
