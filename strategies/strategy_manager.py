@@ -2,6 +2,7 @@ from typing import Dict, List, Any
 from .base_strategy import BaseStrategy
 from .smc_liquidity_master import SMCLiquidityMasterStrategy
 from .session_breakout import SessionBreakoutStrategy
+from .silver_bullet import ICTSilverBulletStrategy
 
 class StrategyManager:
     """
@@ -14,6 +15,7 @@ class StrategyManager:
         
         # Register default built-in strategies
         self.register_strategy("smc_master", SMCLiquidityMasterStrategy())
+        self.register_strategy("silver_bullet", ICTSilverBulletStrategy())
         self.register_strategy("session_breakout", SessionBreakoutStrategy())
 
     def register_strategy(self, strategy_id: str, strategy_instance: BaseStrategy):

@@ -198,6 +198,11 @@ function renderMarketUpdate(data) {
     `;
   }
   checklistContainer.innerHTML = checklistHtml;
+
+  const strategyNameBadge = document.getElementById('strategy-name-badge');
+  if (strategyNameBadge && evalData.strategy) {
+    strategyNameBadge.textContent = evalData.strategy;
+  }
 }
 
 // Copy Ticket for Phone Entry
