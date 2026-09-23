@@ -1,4 +1,5 @@
 import asyncio
+import time
 import json
 import os
 import sys
@@ -99,6 +100,27 @@ async def tradingview_webhook(req: Request):
 
         if price > 0:
             market_data_provider.update_live_price(symbol, price, high, low)
+            mdata = market_data_provider.get_market_data(symbol)
+            mdata["current_price"] = price
+            eval_result = strategy_mgr.evaluate_active(mdata, account_config)
+            payload = {
+                "type": "MARKET_UPDATE",
+                "timestamp": time.time(),
+                "symbol": symbol,
+                "current_price": price,
+                "strategy_id": strategy_mgr.get_active_strategy_id(),
+                "evaluation": eval_result,
+                "is_alert": eval_result.get("decision") not in ["Wait / No trade", None],
+                "account_config": account_config
+            }
+            latest_evaluation = payload
+            if connected_clients:
+                msg_str = json.dumps(payload)
+                for client in list(connected_clients):
+                    try:
+                        await client.send_text(msg_str)
+                    except Exception:
+                        pass
             return {"status": "success", "symbol": symbol, "price": price}
     except Exception as e:
         return {"status": "error", "message": str(e)}
