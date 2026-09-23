@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>TraderPro - Live Strategy Scanner</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.8; transform: scale(1.02); }
+    }
+    .alert-glow-green {
+      animation: pulse-glow 1.5s infinite;
+      box-shadow: 0 0 25px rgba(34, 197, 94, 0.4);
+    }
+    .alert-glow-red {
+      animation: pulse-glow 1.5s infinite;
+      box-shadow: 0 0 25px rgba(239, 68, 68, 0.4);
+    }
+    body {
+      background-color: #090d16;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      touch-action: manipulation;
+    }
+  </style>
+</head>
+<body class="text-slate-100 min-h-screen flex flex-col justify-between selection:bg-cyan-500 selection:text-white">
+
+  <!-- Header -->
+  <header class="bg-slate-900/90 border-b border-slate-800 backdrop-blur sticky top-0 z-40 px-4 py-3">
+    <div class="max-w-md mx-auto flex items-center justify-between">
+      <div class="flex items-center space-x-2">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-600 to-emerald-500 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+          <i class="fa-solid fa-chart-line text-white text-sm"></i>
+        </div>
+        <div>
+          <h1 class="font-bold text-sm tracking-wide flex items-center gap-1.5">
+            TraderPro
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800">LIVE</span>
+          </h1>
+          <div class="flex items-center space-x-1.5">
+            <span id="conn-dot" class="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+            <span id="conn-text" class="text-[10px] text-slate-400 font-medium">Connecting...</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-2">
+        <button id="sound-btn" class="p-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-xs flex items-center gap-1.5" title="Audio Alarm">
+          <i id="sound-icon" class="fa-solid fa-volume-high text-emerald-400"></i>
+          <span class="hidden sm:inline text-[11px]">Audio</span>
+        </button>
+        <button id="install-btn" class="hidden px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-medium text-xs shadow-md shadow-cyan-600/30">
+          <i class="fa-solid fa-download mr-1"></i> Install
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="max-w-md mx-auto w-full p-4 space-y-4 flex-grow">
+
+    <!-- Asset & Strategy Selectors -->
+    <div class="grid grid-cols-2 gap-2">
+      <!-- Asset Selector -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-1.5 flex space-x-1">
+        <button id="btn-nas100" class="flex-1 py-1.5 text-xs font-semibold rounded-lg bg-cyan-600 text-white shadow transition-all" onclick="switchSymbol('NAS100')">
+          NAS100
+        </button>
+        <button id="btn-gold" class="flex-1 py-1.5 text-xs font-semibold rounded-lg text-slate-400 hover:text-white transition-all" onclick="switchSymbol('GOLD')">
+          GOLD
+        </button>
+      </div>
+
+      <!-- Strategy Selector -->
+      <div class="relative">
+        <select id="strategy-select" onchange="switchStrategy(this.value)" class="w-full h-full bg-slate-900 border border-slate-800 text-slate-200 text-xs rounded-xl px-2.5 py-2 font-medium focus:outline-none focus:border-cyan-500 appearance-none">
+          <option value="smc_master">SMC Master (ICT + Goat)</option>
+          <option value="session_breakout">Session Momentum Breakout</option>
+        </select>
+        <div class="absolute right-3 top-3 pointer-events-none text-slate-400 text-xs">
+          <i class="fa-solid fa-chevron-down"></i>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Ticker Card -->
+    <div class="bg-gradient-to-br from-slate-900 via-slate-900/90 to-slate-950 border border-slate-800 rounded-2xl p-4 shadow-xl relative overflow-hidden">
+      <div class="flex justify-between items-start">
+        <div>
+          <span id="card-symbol" class="text-xs font-bold uppercase tracking-wider text-slate-400">NAS100 (US 100)</span>
+          <div class="text-3xl font-extrabold tracking-tight mt-0.5 text-white flex items-baseline gap-2">
+            <span id="live-price">---.--</span>
+            <span id="session-badge" class="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-800 text-cyan-400 border border-slate-700">
+              Session
+            </span>
+          </div>
+        </div>
+        <div class="text-right">
+          <span class="text-[10px] text-slate-400 uppercase tracking-wider">Strategy State</span>
+          <div id="decision-badge" class="mt-1 px-3 py-1 rounded-full text-xs font-bold tracking-wide uppercase bg-slate-800 text-slate-300 border border-slate-700 inline-block">
+            WAIT / NO TRADE
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-3 pt-3 border-t border-slate-800/80 grid grid-cols-2 gap-2 text-[11px] text-slate-400">
+        <div>1H PDH: <span id="val-pdh" class="text-slate-200 font-mono font-medium">---</span></div>
+        <div>1H PDL: <span id="val-pdl" class="text-slate-200 font-mono font-medium">---</span></div>
+      </div>
+    </div>
+
+    <!-- Active Order Alert Box (Hidden until trade setup triggers) -->
+    <div id="order-card" class="hidden bg-slate-900 border-2 rounded-2xl p-4 shadow-2xl relative transition-all duration-300">
+      <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+        <div class="flex items-center space-x-2">
+          <span id="ticket-action-badge" class="px-2.5 py-1 rounded-lg text-xs font-black tracking-wider uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+            BUY LIMIT
+          </span>
+          <span class="text-xs font-bold text-slate-300">ORDER TICKET</span>
+        </div>
+        <button onclick="copyTicket()" class="px-2.5 py-1 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold rounded-lg flex items-center gap-1 shadow">
+          <i class="fa-regular fa-copy"></i>
+          <span>COPY</span>
+        </button>
+      </div>
+
+      <div class="grid grid-cols-3 gap-2 my-3 text-center">
+        <div class="bg-slate-950 p-2 rounded-xl border border-slate-800">
+          <span class="text-[10px] uppercase font-bold text-slate-400">ENTRY</span>
+          <div id="ticket-entry" class="text-base font-extrabold text-cyan-400 font-mono mt-0.5">---</div>
+        </div>
+        <div class="bg-slate-950 p-2 rounded-xl border border-slate-800">
+          <span class="text-[10px] uppercase font-bold text-slate-400">STOP LOSS</span>
+          <div id="ticket-sl" class="text-base font-extrabold text-rose-400 font-mono mt-0.5">---</div>
+        </div>
+        <div class="bg-slate-950 p-2 rounded-xl border border-slate-800">
+          <span class="text-[10px] uppercase font-bold text-slate-400">TAKE PROFIT</span>
+          <div id="ticket-tp" class="text-base font-extrabold text-emerald-400 font-mono mt-0.5">---</div>
+        </div>
+      </div>
+
+      <div class="bg-slate-950/80 rounded-xl p-2.5 border border-slate-800/80 space-y-1 text-xs">
+        <div class="flex justify-between text-slate-300">
+          <span>Risk Amount:</span>
+          <span id="ticket-risk" class="font-bold text-slate-100">$2.50 (0.25%)</span>
+        </div>
+        <div class="flex justify-between text-slate-300">
+          <span>Target Profit / R:R:</span>
+          <span id="ticket-gain" class="font-bold text-emerald-400 font-mono">+$6.00 (1:2.4)</span>
+        </div>
+        <div class="flex justify-between text-slate-300">
+          <span>Consistency Rule:</span>
+          <span id="ticket-consistency" class="text-cyan-400 font-medium">Safe (< 15% Cap)</span>
+        </div>
+        <div class="pt-1.5 border-t border-slate-800/80 text-[11px] text-amber-300/90 leading-tight">
+          <span class="font-bold">Cancel If:</span> <span id="ticket-cancel">---</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Strategy Flow Checklist -->
+    <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg space-y-2.5">
+      <div class="flex justify-between items-center pb-1 border-b border-slate-800">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+          <i class="fa-solid fa-list-check text-cyan-400"></i>
+          Strategy Flow & Verification
+        </h2>
+        <span id="strategy-name-badge" class="text-[10px] font-medium text-slate-400">SMC Master</span>
+      </div>
+
+      <div id="checklist-container" class="space-y-2 text-xs">
+        <!-- Dynamic checklist items -->
+      </div>
+    </div>
+
+    <!-- Goat $1,000 Risk Framework Guard -->
+    <div class="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-3 text-[11px] text-slate-400 space-y-1.5">
+      <div class="flex justify-between items-center text-slate-300 font-semibold">
+        <span class="flex items-center gap-1">
+          <i class="fa-solid fa-shield-halved text-cyan-400"></i>
+          Goat $1k Prop Rules
+        </span>
+        <span class="text-emerald-400 font-mono">SAFE</span>
+      </div>
+      <div class="grid grid-cols-2 gap-2 text-slate-300 pt-1">
+        <div>Risk Per Trade: <span class="text-white font-bold">$2.50 (0.25%)</span></div>
+        <div>Daily DD Limit: <span class="text-rose-400 font-bold">$30.00 (3%)</span></div>
+        <div>Floating Loss Cap: <span class="text-amber-400 font-bold">$20.00 (2%)</span></div>
+        <div>Consistency Cap: <span class="text-cyan-400 font-bold">&lt; 15% of total</span></div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="bg-slate-900/90 border-t border-slate-800 text-center py-2.5 text-[11px] text-slate-500">
+    TraderPro Mobile Engine &bull; Auto Updates Per Sec
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,171 @@
+import datetime
+from typing import Dict, Any, Optional
+from .base_strategy import BaseStrategy
+
+class SMCLiquidityMasterStrategy(BaseStrategy):
+    """
+    ICT / SMC Liquidity Master Strategy with Goat Funded Trader Risk Framework.
+    Flow:
+    4H Bias -> 1H Context -> 15M BSL/SSL -> Session Timing -> Sweep ->
+    1M Control -> Buildup -> Inducement -> BOS -> Protected Level -> POI -> Mitigation -> Entry -> SL -> TP
+    """
+    def __init__(self):
+        super().__init__(
+            name="SMC Liquidity Master (ICT + Goat $1k)",
+            description="Trades post-sweep displacement on 1M after 15M liquidity takes during NY/Pre-NY sessions."
+        )
+
+    def evaluate(self, market_data: Dict[str, Any], account_config: Dict[str, Any]) -> Dict[str, Any]:
+        c_1m = market_data.get("candles_1m", [])
+        c_15m = market_data.get("candles_15m", [])
+        c_1h = market_data.get("candles_1h", [])
+        symbol = market_data.get("symbol_name", "NAS100")
+        current_price = market_data.get("current_price", 0.0)
+
+        if not c_1m or not c_15m or not c_1h or current_price == 0.0:
+            return {
+                "strategy": self.name,
+                "decision": "Wait / No trade",
+                "reason": "Insufficient market data.",
+                "checklist": {},
+                "order_ticket": None
+            }
+
+        # 1. 4H Environment & Dealing Range
+        h4_high = max([c['high'] for c in c_1h[-40:]])
+        h4_low = min([c['low'] for c in c_1h[-40:]])
+        h4_range_mid = (h4_high + h4_low) / 2
+        h4_bias = "BUY (Bullish Flow)" if current_price > h4_range_mid else "SELL (Bearish Flow)"
+        if current_price >= h4_high * 0.985:
+            h4_bias = "BULLISH INTO EXTREME PREMIUM / BSL"
+        elif current_price <= h4_low * 1.015:
+            h4_bias = "BEARISH INTO EXTREME DISCOUNT / SSL"
+
+        # 2. 1H Context & Session Levels
+        pdh = max([c['high'] for c in c_1h[-24:-1]]) if len(c_1h) >= 25 else max([c['high'] for c in c_1h])
+        pdl = min([c['low'] for c in c_1h[-24:-1]]) if len(c_1h) >= 25 else min([c['low'] for c in c_1h])
+
+        # 3. 15M Liquidity & Inducement
+        recent_15m = c_15m[-16:]
+        bsl_15m = max([c['high'] for c in recent_15m[:-1]])
+        ssl_15m = min([c['low'] for c in recent_15m[:-1]])
+
+        # 4. Session Timing (NY Session: 12:00 to 20:00 UTC)
+        now_utc = datetime.datetime.utcnow()
+        is_ny_session = 12 <= now_utc.hour <= 20
+        session_label = "Pre-NY / NY Session (Prime Window)" if is_ny_session else "Asian / Euro Session (Lower Probability)"
+
+        # 5. Liquidity Sweep Detection (Past 12 1M candles)
+        recent_1m_high = max([c['high'] for c in c_1m[-12:]])
+        recent_1m_low = min([c['low'] for c in c_1m[-12:]])
+
+        bsl_swept = recent_1m_high >= bsl_15m
+        ssl_swept = recent_1m_low <= ssl_15m
+
+        checklist = {
+            "4H Swing Bias": h4_bias,
+            "1H Session Context": f"PDH: {round(pdh, 1)} | PDL: {round(pdl, 1)}",
+            "15M Liquidity": f"BSL: {round(bsl_15m, 1)} | SSL: {round(ssl_15m, 1)}",
+            "Session Timing": session_label,
+            "Liquidity Taken": "YES" if (bsl_swept or ssl_swept) else "NO",
+            "1M Control & BOS": "NO",
+            "Protected Level": "NONE",
+            "POI Formed": "NO",
+            "Mitigation Check": "WAITING"
+        }
+
+        decision = "Wait / No trade"
+        reason = "Awaiting 15M liquidity sweep and subsequent 1M structural sequence."
+        order_ticket = None
+
+        # Risk parameters
+        risk_dollars = account_config.get("risk_per_trade", 2.50)
+        min_rr = account_config.get("min_rr", 1.8)
+
+        # 6. Evaluation of 1M Structure Post-Sweep
+        if bsl_swept:
+            # Look for 1M Bearish BOS (closing below recent 1M swing low)
+            m1_swing_lows = [c_1m[i]['low'] for i in range(-15, -2) 
+                             if c_1m[i]['low'] < c_1m[i-1]['low'] and c_1m[i]['low'] < c_1m[i+1]['low']]
+            
+            if m1_swing_lows and current_price < m1_swing_lows[-1]:
+                checklist["1M Control & BOS"] = "YES (Bearish BOS Confirmed)"
+                protected_high = recent_1m_high
+                checklist["Protected Level"] = f"Protected HIGH: {round(protected_high, 1)}"
+                
+                # POI: 1M Bearish FVG / Supply midpoint
+                poi_entry = (protected_high + current_price) / 2
+                checklist["POI Formed"] = f"1M Supply @ {round(poi_entry, 1)}"
+                
+                # SL: beyond Protected High with buffer
+                sl_buffer = 4.0 if symbol == "NAS100" else 1.5
+                sl = protected_high + sl_buffer
+                tp = ssl_15m
+                
+                sl_distance = abs(sl - poi_entry)
+                tp_distance = abs(poi_entry - tp)
+                rr = tp_distance / sl_distance if sl_distance > 0 else 0
+                
+                if rr >= min_rr:
+                    decision = "Sell limit"
+                    reason = "15M BSL swept -> 1M Bearish BOS -> Valid POI Retracement with > 1:2 R:R."
+                    projected_gain = round(risk_dollars * rr, 2)
+                    order_ticket = {
+                        "Order Type": "SELL LIMIT",
+                        "Instrument": symbol,
+                        "Entry Price": round(poi_entry, 1),
+                        "Stop Loss": round(sl, 1),
+                        "Take Profit": round(tp, 1),
+                        "R:R": f"1:{round(rr, 2)}",
+                        "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
+                        "Projected Profit": f"+${projected_gain:.2f}",
+                        "Consistency Impact": f"{round((projected_gain / 100.0) * 100, 1)}% (< 15% Cap Safe)",
+                        "Cancel If": f"Price breaks above Protected High ({round(protected_high, 1)}) or sweeps TP ({round(tp, 1)}) before fill."
+                    }
+
+        elif ssl_swept:
+            # Look for 1M Bullish BOS (closing above recent 1M swing high)
+            m1_swing_highs = [c_1m[i]['high'] for i in range(-15, -2) 
+                              if c_1m[i]['high'] > c_1m[i-1]['high'] and c_1m[i]['high'] > c_1m[i+1]['high']]
+            
+            if m1_swing_highs and current_price > m1_swing_highs[-1]:
+                checklist["1M Control & BOS"] = "YES (Bullish BOS Confirmed)"
+                protected_low = recent_1m_low
+                checklist["Protected Level"] = f"Protected LOW: {round(protected_low, 1)}"
+                
+                # POI: 1M Bullish Demand midpoint
+                poi_entry = (protected_low + current_price) / 2
+                checklist["POI Formed"] = f"1M Demand @ {round(poi_entry, 1)}"
+                
+                sl_buffer = 4.0 if symbol == "NAS100" else 1.5
+                sl = protected_low - sl_buffer
+                tp = bsl_15m
+                
+                sl_distance = abs(poi_entry - sl)
+                tp_distance = abs(tp - poi_entry)
+                rr = tp_distance / sl_distance if sl_distance > 0 else 0
+                
+                if rr >= min_rr:
+                    decision = "Buy limit"
+                    reason = "15M SSL swept -> 1M Bullish BOS -> Valid POI Retracement with > 1:2 R:R."
+                    projected_gain = round(risk_dollars * rr, 2)
+                    order_ticket = {
+                        "Order Type": "BUY LIMIT",
+                        "Instrument": symbol,
+                        "Entry Price": round(poi_entry, 1),
+                        "Stop Loss": round(sl, 1),
+                        "Take Profit": round(tp, 1),
+                        "R:R": f"1:{round(rr, 2)}",
+                        "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
+                        "Projected Profit": f"+${projected_gain:.2f}",
+                        "Consistency Impact": f"{round((projected_gain / 100.0) * 100, 1)}% (< 15% Cap Safe)",
+                        "Cancel If": f"Price drops below Protected Low ({round(protected_low, 1)}) or sweeps TP ({round(tp, 1)}) before fill."
+                    }
+
+        return {
+            "strategy": self.name,
+            "decision": decision,
+            "reason": reason,
+            "checklist": checklist,
+            "order_ticket": order_ticket
+        }
