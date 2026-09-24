@@ -321,6 +321,43 @@ function switchStrategy(strategyId) {
   }
 }
 
+// Manual Strategy Refresh button handler
+async function refreshStrategy() {
+  const icon = document.getElementById('refresh-icon');
+  const btn = document.getElementById('refresh-strategy-btn');
+  if (icon) icon.classList.add('fa-spin');
+  if (btn) btn.disabled = true;
+
+  try {
+    const stratId = document.getElementById('strategy-select')?.value || '';
+
+    // 1. Send immediate request via WebSocket if open
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ 
+        refresh: true, 
+        symbol: currentSymbol,
+        strategy_id: stratId 
+      }));
+    }
+
+    // 2. Also fetch directly via REST for immediate re-evaluation and checklist render
+    const res = await fetch(`/api/refresh?symbol=${encodeURIComponent(currentSymbol)}&strategy_id=${encodeURIComponent(stratId)}&t=${Date.now()}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.type === 'MARKET_UPDATE') {
+        renderMarketUpdate(data);
+      }
+    }
+  } catch (err) {
+    console.error('Strategy refresh error:', err);
+  } finally {
+    setTimeout(() => {
+      if (icon) icon.classList.remove('fa-spin');
+      if (btn) btn.disabled = false;
+    }, 700);
+  }
+}
+
 // Initialize on Load
 window.addEventListener('DOMContentLoaded', () => {
   connectWebSocket();

@@ -40,13 +40,13 @@ class MarketDataProvider:
         except Exception:
             return None
 
-    def get_market_data(self, symbol_key: str = "NAS100") -> Dict[str, Any]:
+    def get_market_data(self, symbol_key: str = "NAS100", force_fresh: bool = False) -> Dict[str, Any]:
         ticker = self.symbols.get(symbol_key, "NQ=F")
         now = time.time()
         
-        # Cache HTF (15m, 1h) for 30s to keep it fast
+        # Cache HTF (15m, 1h) for 30s to keep it fast (bypassed on force_fresh)
         cache_key = f"{symbol_key}_htf"
-        if cache_key not in self._cache or (now - self._last_fetch.get(cache_key, 0)) > 30:
+        if force_fresh or cache_key not in self._cache or (now - self._last_fetch.get(cache_key, 0)) > 30:
             c_15m = self.fetch_ohlcv(ticker, "15m", "5d")
             c_1h = self.fetch_ohlcv(ticker, "1h", "1mo")
             if c_15m and c_1h:

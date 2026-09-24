@@ -79,6 +79,37 @@ def update_config(req: AccountConfigRequest):
 def get_status():
     return latest_evaluation
 
+@app.get("/api/refresh")
+@app.post("/api/refresh")
+async def trigger_refresh(symbol: str = None, strategy_id: str = None):
+    global latest_evaluation
+    sym = symbol or account_config.get("active_symbol", "NAS100")
+    if strategy_id:
+        strategy_mgr.set_active_strategy(strategy_id)
+    # Fetch fresh market data bypassing 30s cache
+    data = await asyncio.to_thread(market_data_provider.get_market_data, sym, True)
+    eval_result = strategy_mgr.evaluate_active(data, account_config)
+    
+    payload = {
+        "type": "MARKET_UPDATE",
+        "timestamp": data.get("timestamp"),
+        "symbol": sym,
+        "current_price": data.get("current_price"),
+        "strategy_id": strategy_mgr.get_active_strategy_id(),
+        "evaluation": eval_result,
+        "is_alert": eval_result.get("decision") not in ["Wait / No trade", None],
+        "account_config": account_config
+    }
+    latest_evaluation = payload
+    if connected_clients:
+        msg_str = json.dumps(payload)
+        for client in list(connected_clients):
+            try:
+                await client.send_text(msg_str)
+            except Exception:
+                pass
+    return payload
+
 @app.get("/api/price")
 @app.get("/api/webhook")
 async def get_price_update(price: float, symbol: str = "NAS100"):
@@ -195,6 +226,24 @@ async def websocket_endpoint(websocket: WebSocket):
                     account_config["active_symbol"] = msg["switch_symbol"]
                 if "switch_strategy" in msg:
                     strategy_mgr.set_active_strategy(msg["switch_strategy"])
+                if "refresh" in msg:
+                    sym = msg.get("symbol", account_config.get("active_symbol", "NAS100"))
+                    if "strategy_id" in msg and msg["strategy_id"]:
+                        strategy_mgr.set_active_strategy(msg["strategy_id"])
+                    data = await asyncio.to_thread(market_data_provider.get_market_data, sym, True)
+                    eval_result = strategy_mgr.evaluate_active(data, account_config)
+                    payload = {
+                        "type": "MARKET_UPDATE",
+                        "timestamp": data.get("timestamp"),
+                        "symbol": sym,
+                        "current_price": data.get("current_price"),
+                        "strategy_id": strategy_mgr.get_active_strategy_id(),
+                        "evaluation": eval_result,
+                        "is_alert": eval_result.get("decision") not in ["Wait / No trade", None],
+                        "account_config": account_config
+                    }
+                    latest_evaluation = payload
+                    await websocket.send_text(json.dumps(payload))
             except Exception:
                 pass
     except WebSocketDisconnect:
