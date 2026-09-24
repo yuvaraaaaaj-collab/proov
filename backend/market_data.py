@@ -54,8 +54,14 @@ class MarketDataProvider:
                 self._cache[cache_key] = {"c_15m": c_15m, "c_1h": c_1h}
                 self._last_fetch[cache_key] = now
         
-        # Fetch 1m candles fresh
-        c_1m = self.fetch_ohlcv(ticker, "1m", "1d")
+        # Fetch 1m candles fresh with cache fallback
+        fresh_1m = self.fetch_ohlcv(ticker, "1m", "1d")
+        if fresh_1m and len(fresh_1m) > 0:
+            self._cache[f"{symbol_key}_1m"] = fresh_1m
+            c_1m = fresh_1m
+        else:
+            c_1m = self._cache.get(f"{symbol_key}_1m", [])
+
         htf = self._cache.get(cache_key, {"c_15m": [], "c_1h": []})
         
         # Base broker offset for Capital.com quotes
@@ -66,6 +72,9 @@ class MarketDataProvider:
         
         # 1. Check TradingView real-time feed for exact Capital.com tick
         tv_price = tv_feed.get_price(symbol_key)
+        tv_quote = tv_feed.get_quote(symbol_key)
+        tv_high = tv_quote.get("high", 0.0)
+        tv_low = tv_quote.get("low", 0.0)
         
         # 2. Check for webhook override
         has_active_webhook = False
@@ -126,6 +135,8 @@ class MarketDataProvider:
             "symbol_name": symbol_key,
             "ticker": ticker,
             "current_price": current_price,
+            "day_high": tv_high,
+            "day_low": tv_low,
             "candles_1m": c_1m or [],
             "candles_15m": htf["c_15m"],
             "candles_1h": htf["c_1h"],

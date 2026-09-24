@@ -300,6 +300,36 @@ function loadTradingViewWidget(symbol) {
 }
 
 // Load Embedded TradingView Single Quote Ticker Widget (Direct Capital.com Real-Time Stream)
+function loadSingleQuoteWidget(symbol) {
+  const container = document.getElementById('tradingview-quote-box');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const tvSymbol = (symbol === 'GOLD') ? 'CAPITALCOM:GOLD' : 'CAPITALCOM:US100';
+
+  const widgetWrapper = document.createElement('div');
+  widgetWrapper.className = 'tradingview-widget-container';
+  
+  const widgetDiv = document.createElement('div');
+  widgetDiv.className = 'tradingview-widget-container__widget';
+  widgetWrapper.appendChild(widgetDiv);
+
+  const script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-single-quote.js';
+  script.async = true;
+  script.innerHTML = JSON.stringify({
+    "symbol": tvSymbol,
+    "width": "100%",
+    "colorTheme": "dark",
+    "isTransparent": true,
+    "locale": "en"
+  });
+
+  widgetWrapper.appendChild(script);
+  container.appendChild(widgetWrapper);
+}
+
 // Asset Switcher
 function switchSymbol(symbol) {
   currentSymbol = symbol;
@@ -321,6 +351,7 @@ function switchSymbol(symbol) {
   }
 
   loadTradingViewWidget(symbol);
+  loadSingleQuoteWidget(symbol);
 
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ switch_symbol: symbol }));
@@ -397,8 +428,9 @@ window.addEventListener('DOMContentLoaded', () => {
   // 2. Connect WebSocket
   connectWebSocket();
 
-  // 3. Mount TradingView chart widget
+  // 3. Mount TradingView chart widget and Single Quote ticker box
   setTimeout(() => {
     loadTradingViewWidget('NAS100');
+    loadSingleQuoteWidget('NAS100');
   }, 200);
 });

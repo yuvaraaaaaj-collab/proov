@@ -44,6 +44,14 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
         # 2. 1H Context & Session Levels
         pdh = max([c['high'] for c in c_1h[-24:-1]]) if len(c_1h) >= 25 else max([c['high'] for c in c_1h])
         pdl = min([c['low'] for c in c_1h[-24:-1]]) if len(c_1h) >= 25 else min([c['low'] for c in c_1h])
+        
+        # Align with TradingView Day High and Low for exact chart match
+        day_high = market_data.get("day_high", 0.0)
+        day_low = market_data.get("day_low", 0.0)
+        if day_high > 0:
+            pdh = day_high
+        if day_low > 0:
+            pdl = day_low
 
         # 3. 15M Liquidity & Inducement
         recent_15m = c_15m[-16:] if len(c_15m) >= 16 else c_15m

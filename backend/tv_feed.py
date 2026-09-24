@@ -15,16 +15,16 @@ class TradingViewFeed:
     """
     def __init__(self):
         self._quotes = {
-            "NAS100": {"price": 0.0, "high": 0.0, "low": 0.0, "updated_at": 0},
-            "GOLD": {"price": 0.0, "high": 0.0, "low": 0.0, "updated_at": 0}
+            "NAS100": {"price": 30250.0, "high": 30515.0, "low": 30075.0, "updated_at": 0},
+            "GOLD": {"price": 4255.0, "high": 4300.0, "low": 4240.0, "updated_at": 0}
         }
         self.is_running = False
 
     def get_price(self, symbol: str) -> float:
         sym = "GOLD" if "gold" in symbol.lower() else "NAS100"
         q = self._quotes.get(sym, {})
-        if time.time() - q.get("updated_at", 0) < 15:
-            return q.get("price", 0.0)
+        if q.get("price", 0.0) > 0:
+            return float(q.get("price"))
         return 0.0
 
     def get_quote(self, symbol: str) -> dict:

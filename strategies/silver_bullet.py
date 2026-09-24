@@ -111,6 +111,14 @@ class ICTSilverBulletStrategy(BaseStrategy):
         pdh = max([c['high'] for c in c_1h[-24:-1]]) if len(c_1h) >= 25 else max([c['high'] for c in c_1h])
         pdl = min([c['low'] for c in c_1h[-24:-1]]) if len(c_1h) >= 25 else min([c['low'] for c in c_1h])
 
+        # Align with TradingView Day High and Low for exact chart match
+        day_high = market_data.get("day_high", 0.0)
+        day_low = market_data.get("day_low", 0.0)
+        if day_high > 0:
+            pdh = day_high
+        if day_low > 0:
+            pdl = day_low
+
         # 3. Sweep / Raid Detection (Past 15 1M candles)
         recent_1m = c_1m[-15:]
         recent_high = max([c['high'] for c in recent_1m])
