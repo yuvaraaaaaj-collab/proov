@@ -149,22 +149,30 @@ function renderMarketUpdate(data) {
     }
   }
 
+  const lblPdh = document.getElementById('label-pdh');
+  const lblPdl = document.getElementById('label-pdl');
   const pdhEl = document.getElementById('val-pdh');
   const pdlEl = document.getElementById('val-pdl');
   if (pdhEl && pdlEl) {
     if (checklist['1H Session Context']) {
+      if (lblPdh) lblPdh.textContent = '1H PDH';
+      if (lblPdl) lblPdl.textContent = '1H PDL';
       const parts = checklist['1H Session Context'].split('|');
       if (parts.length >= 2) {
         pdhEl.textContent = parts[0].replace('PDH:', '').trim();
         pdlEl.textContent = parts[1].replace('PDL:', '').trim();
       }
     } else if (checklist['Draw on Liquidity (DOL)']) {
+      if (lblPdh) lblPdh.textContent = '15M BSL (Buy Pool)';
+      if (lblPdl) lblPdl.textContent = '15M SSL (Sell Pool)';
       const parts = checklist['Draw on Liquidity (DOL)'].split('|');
       if (parts.length >= 2) {
         pdhEl.textContent = parts[0].replace('BSL:', '').trim();
         pdlEl.textContent = parts[1].replace('SSL:', '').trim();
       }
     } else if (checklist['Session Range High']) {
+      if (lblPdh) lblPdh.textContent = 'Session High';
+      if (lblPdl) lblPdl.textContent = 'Session Low';
       pdhEl.textContent = checklist['Session Range High'];
       pdlEl.textContent = checklist['Session Range Low'];
     }

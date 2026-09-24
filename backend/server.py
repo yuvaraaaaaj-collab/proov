@@ -330,6 +330,8 @@ async def market_scanner_loop():
 
 @app.on_event("startup")
 async def startup_event():
+    from backend.tv_feed import tv_feed
+    asyncio.create_task(tv_feed.run())
     asyncio.create_task(market_scanner_loop())
 
 # Mount frontend directory for static assets

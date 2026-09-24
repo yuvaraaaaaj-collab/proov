@@ -1,6 +1,7 @@
 import time
 import requests
 from typing import Dict, Any, Optional
+from backend.tv_feed import tv_feed
 
 class MarketDataProvider:
     def __init__(self):
@@ -63,21 +64,29 @@ class MarketDataProvider:
         
         current_price = c_1m[-1]['close'] if c_1m else 0.0
         
-        # Check for webhook override & auto-calibrated live offset
+        # 1. Check TradingView real-time feed for exact Capital.com tick
+        tv_price = tv_feed.get_price(symbol_key)
+        
+        # 2. Check for webhook override
+        has_active_webhook = False
         if symbol_key in self._cache.get("overrides", {}):
             override = self._cache["overrides"][symbol_key]
             override_age = now - override.get("updated_at", 0)
-            
             if override_age < 6:
-                # Active tab stream: use exact price and calibrate broker offset
                 current_price = override.get("price", current_price)
+                has_active_webhook = True
+                if c_1m:
+                    broker_offset = current_price - c_1m[-1]['close']
+                    self._cache[f"{symbol_key}_offset"] = broker_offset
+
+        if not has_active_webhook:
+            if tv_price > 0:
+                current_price = tv_price
                 if c_1m:
                     broker_offset = current_price - c_1m[-1]['close']
                     self._cache[f"{symbol_key}_offset"] = broker_offset
             else:
                 current_price = round(current_price + broker_offset, 1)
-        else:
-            current_price = round(current_price + broker_offset, 1)
 
         # Calibrate candle levels with broker offset so PDH/PDL and sweeps align with Capital.com
         if broker_offset != 0.0:
