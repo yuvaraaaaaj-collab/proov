@@ -88,9 +88,19 @@ class MarketDataProvider:
             else:
                 current_price = round(current_price + broker_offset, 1)
 
-        # Calibrate candle levels with broker offset so PDH/PDL and sweeps align with Capital.com
+        # Calibrate candle levels with broker offset so PDH/PDL, BSL/SSL and 1M structure align with Capital.com
         if broker_offset != 0.0:
             if c_1m:
+                calibrated_1m = []
+                for c in c_1m:
+                    calibrated_1m.append({
+                        **c,
+                        "open": round(c["open"] + broker_offset, 1),
+                        "high": round(c["high"] + broker_offset, 1),
+                        "low": round(c["low"] + broker_offset, 1),
+                        "close": round(c["close"] + broker_offset, 1),
+                    })
+                c_1m = calibrated_1m
                 c_1m[-1]['close'] = current_price
             calibrated_15m = []
             for c in htf["c_15m"]:

@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 import logging
+import inspect
 import websockets
 
 logger = logging.getLogger("tv_feed")
@@ -33,10 +34,20 @@ class TradingViewFeed:
     async def run(self):
         self.is_running = True
         uri = "wss://data.tradingview.com/socket.io/websocket"
-        headers = [
-            ("Origin", "https://www.tradingview.com"),
-            ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-        ]
+        
+        # Determine whether websockets library expects extra_headers or additional_headers
+        sig = inspect.signature(websockets.connect)
+        conn_kwargs = {"ping_interval": 20, "ping_timeout": 15}
+        if "extra_headers" in sig.parameters:
+            conn_kwargs["extra_headers"] = {
+                "Origin": "https://www.tradingview.com",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+            }
+        elif "additional_headers" in sig.parameters:
+            conn_kwargs["additional_headers"] = [
+                ("Origin", "https://www.tradingview.com"),
+                ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            ]
 
         def fmt(obj):
             msg = json.dumps(obj)
@@ -44,7 +55,7 @@ class TradingViewFeed:
 
         while self.is_running:
             try:
-                async with websockets.connect(uri, additional_headers=headers, ping_interval=20, ping_timeout=15) as ws:
+                async with websockets.connect(uri, **conn_kwargs) as ws:
                     session_id = f"qs_{int(time.time())}"
                     await ws.send(fmt({"m": "set_auth_token", "p": ["unauthorized_user_token"]}))
                     await ws.send(fmt({"m": "quote_create_session", "p": [session_id]}))
@@ -56,6 +67,8 @@ class TradingViewFeed:
                         "m": "quote_add_symbols",
                         "p": [session_id, "CAPITALCOM:US100", "CAPITALCOM:GOLD"]
                     }))
+
+                    print(f"[TV Feed] Successfully connected to TradingView live stream ({session_id})")
 
                     while self.is_running:
                         msg = await ws.recv()
@@ -89,7 +102,7 @@ class TradingViewFeed:
                             except Exception:
                                 pass
             except Exception as e:
-                logger.warning(f"TradingView Feed reconnecting: {e}")
+                print(f"[TV Feed] Error or Reconnecting: {e}")
                 await asyncio.sleep(2)
 
 tv_feed = TradingViewFeed()
