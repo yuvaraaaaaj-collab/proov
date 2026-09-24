@@ -1,4 +1,4 @@
-const CACHE_NAME = 'trader-pro-v1';
+const CACHE_NAME = 'trader-pro-v3.1';
 const ASSETS = [
   '/',
   '/index.html',
@@ -25,6 +25,11 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
+  const url = new URL(e.request.url);
+  // Never cache API or WebSocket requests
+  if (url.pathname.startsWith('/api') || url.pathname.startsWith('/ws')) {
+    return;
+  }
   // Network first, fallback to cache
   e.respondWith(
     fetch(e.request).catch(() => caches.match(e.request))

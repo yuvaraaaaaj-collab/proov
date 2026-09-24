@@ -46,9 +46,9 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
         pdl = min([c['low'] for c in c_1h[-24:-1]]) if len(c_1h) >= 25 else min([c['low'] for c in c_1h])
 
         # 3. 15M Liquidity & Inducement
-        recent_15m = c_15m[-16:]
-        bsl_15m = max([c['high'] for c in recent_15m[:-1]])
-        ssl_15m = min([c['low'] for c in recent_15m[:-1]])
+        recent_15m = c_15m[-16:] if len(c_15m) >= 16 else c_15m
+        bsl_15m = max([c['high'] for c in recent_15m[:-1]]) if len(recent_15m) > 1 else recent_15m[0]['high']
+        ssl_15m = min([c['low'] for c in recent_15m[:-1]]) if len(recent_15m) > 1 else recent_15m[0]['low']
 
         # 4. Session Timing (NY Session: 12:00 to 20:00 UTC)
         now_utc = datetime.datetime.utcnow()
@@ -83,10 +83,14 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
         min_rr = account_config.get("min_rr", 1.8)
 
         # 6. Evaluation of 1M Structure Post-Sweep
-        if bsl_swept:
+        if bsl_swept and len(c_1m) >= 4:
             # Look for 1M Bearish BOS (closing below recent 1M swing low)
-            m1_swing_lows = [c_1m[i]['low'] for i in range(-15, -2) 
-                             if c_1m[i]['low'] < c_1m[i-1]['low'] and c_1m[i]['low'] < c_1m[i+1]['low']]
+            start_i = max(1, len(c_1m) - 15)
+            end_i = max(1, len(c_1m) - 2)
+            m1_swing_lows = [
+                c_1m[i]['low'] for i in range(start_i, end_i)
+                if c_1m[i]['low'] < c_1m[i-1]['low'] and c_1m[i]['low'] < c_1m[i+1]['low']
+            ]
             
             if m1_swing_lows and current_price < m1_swing_lows[-1]:
                 checklist["1M Control & BOS"] = "YES (Bearish BOS Confirmed)"
@@ -123,10 +127,14 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                         "Cancel If": f"Price breaks above Protected High ({round(protected_high, 1)}) or sweeps TP ({round(tp, 1)}) before fill."
                     }
 
-        elif ssl_swept:
+        elif ssl_swept and len(c_1m) >= 4:
             # Look for 1M Bullish BOS (closing above recent 1M swing high)
-            m1_swing_highs = [c_1m[i]['high'] for i in range(-15, -2) 
-                              if c_1m[i]['high'] > c_1m[i-1]['high'] and c_1m[i]['high'] > c_1m[i+1]['high']]
+            start_i = max(1, len(c_1m) - 15)
+            end_i = max(1, len(c_1m) - 2)
+            m1_swing_highs = [
+                c_1m[i]['high'] for i in range(start_i, end_i)
+                if c_1m[i]['high'] > c_1m[i-1]['high'] and c_1m[i]['high'] > c_1m[i+1]['high']
+            ]
             
             if m1_swing_highs and current_price > m1_swing_highs[-1]:
                 checklist["1M Control & BOS"] = "YES (Bullish BOS Confirmed)"

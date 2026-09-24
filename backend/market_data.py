@@ -8,9 +8,9 @@ class MarketDataProvider:
         self._last_fetch = {}
         self._headers = {"User-Agent": "Mozilla/5.0"}
         
-        # Ticker mappings (Spot Cash Index for NAS100 / US100)
+        # Ticker mappings (CME E-mini Futures matching Capital.com CFD quotes)
         self.symbols = {
-            "NAS100": "^NDX",
+            "NAS100": "NQ=F",
             "GOLD": "GC=F"
         }
 
@@ -57,8 +57,8 @@ class MarketDataProvider:
         c_1m = self.fetch_ohlcv(ticker, "1m", "1d")
         htf = self._cache.get(cache_key, {"c_15m": [], "c_1h": []})
         
-        # Base broker offset for Capital.com quotes (vs cash index)
-        default_offset = 82.2 if symbol_key == "NAS100" else 0.0
+        # Base broker offset for Capital.com quotes
+        default_offset = 0.0
         broker_offset = self._cache.get(f"{symbol_key}_offset", default_offset)
         
         current_price = c_1m[-1]['close'] if c_1m else 0.0

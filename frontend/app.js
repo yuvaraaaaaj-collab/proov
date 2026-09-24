@@ -137,15 +137,36 @@ function renderMarketUpdate(data) {
     decBadge.textContent = decision;
   }
 
-  // 3. Session & Levels
-  if (checklist['Session Timing']) {
-    document.getElementById('session-badge').textContent = checklist['Session Timing'].split('(')[0].trim();
+  // 3. Session & Levels (Universal mapping for SMC, Silver Bullet & Session Breakout)
+  const sessionBadge = document.getElementById('session-badge');
+  if (sessionBadge) {
+    if (checklist['Silver Bullet Window']) {
+      sessionBadge.textContent = checklist['Silver Bullet Window'].split(' - ')[0].replace('Outside Window', 'Outside Window').trim();
+    } else if (checklist['Session Timing']) {
+      sessionBadge.textContent = checklist['Session Timing'].split('(')[0].trim();
+    } else if (checklist['Breakout State']) {
+      sessionBadge.textContent = checklist['Breakout State'];
+    }
   }
-  if (checklist['1H Session Context']) {
-    const parts = checklist['1H Session Context'].split('|');
-    if (parts.length >= 2) {
-      document.getElementById('val-pdh').textContent = parts[0].replace('PDH:', '').trim();
-      document.getElementById('val-pdl').textContent = parts[1].replace('PDL:', '').trim();
+
+  const pdhEl = document.getElementById('val-pdh');
+  const pdlEl = document.getElementById('val-pdl');
+  if (pdhEl && pdlEl) {
+    if (checklist['1H Session Context']) {
+      const parts = checklist['1H Session Context'].split('|');
+      if (parts.length >= 2) {
+        pdhEl.textContent = parts[0].replace('PDH:', '').trim();
+        pdlEl.textContent = parts[1].replace('PDL:', '').trim();
+      }
+    } else if (checklist['Draw on Liquidity (DOL)']) {
+      const parts = checklist['Draw on Liquidity (DOL)'].split('|');
+      if (parts.length >= 2) {
+        pdhEl.textContent = parts[0].replace('BSL:', '').trim();
+        pdlEl.textContent = parts[1].replace('SSL:', '').trim();
+      }
+    } else if (checklist['Session Range High']) {
+      pdhEl.textContent = checklist['Session Range High'];
+      pdlEl.textContent = checklist['Session Range Low'];
     }
   }
 
@@ -183,21 +204,33 @@ function renderMarketUpdate(data) {
 
   // 5. Checklist Items
   const checklistContainer = document.getElementById('checklist-container');
-  let checklistHtml = '';
-  for (const [key, val] of Object.entries(checklist)) {
-    const isPositive = String(val).startsWith('YES') || String(val).startsWith('BUY') || String(val).includes('Confirmed');
-    const isWaiting = String(val).startsWith('WAIT') || String(val) === 'NO' || String(val) === 'NONE';
-    
-    checklistHtml += `
-      <div class="flex justify-between items-center py-1.5 border-b border-slate-800/60 last:border-none">
-        <span class="text-slate-400">${key}</span>
-        <span class="font-medium font-mono text-[11px] ${
-          isPositive ? 'text-emerald-400' : isWaiting ? 'text-slate-400' : 'text-cyan-400'
-        }">${val}</span>
-      </div>
-    `;
+  if (checklistContainer) {
+    const entries = Object.entries(checklist);
+    if (entries.length === 0) {
+      checklistContainer.innerHTML = `
+        <div class="py-3 text-center text-slate-500 text-xs italic">
+          Scanning market data... Click <b>Refresh</b> to force update.
+        </div>
+      `;
+    } else {
+      let checklistHtml = '';
+      for (const [key, val] of entries) {
+        const valStr = String(val);
+        const isPositive = valStr.startsWith('YES') || valStr.startsWith('BUY') || valStr.includes('Confirmed') || valStr.includes('ACTIVE') || valStr.includes('BREAKOUT');
+        const isWaiting = valStr.startsWith('WAIT') || valStr === 'NO' || valStr === 'NONE' || valStr.startsWith('Outside') || valStr.includes('INSIDE');
+        
+        checklistHtml += `
+          <div class="flex justify-between items-center py-1.5 border-b border-slate-800/60 last:border-none">
+            <span class="text-slate-400 font-medium">${key}</span>
+            <span class="font-medium font-mono text-[11px] ${
+              isPositive ? 'text-emerald-400 font-bold' : isWaiting ? 'text-slate-400' : 'text-cyan-400'
+            }">${val}</span>
+          </div>
+        `;
+      }
+      checklistContainer.innerHTML = checklistHtml;
+    }
   }
-  checklistContainer.innerHTML = checklistHtml;
 
   const strategyNameBadge = document.getElementById('strategy-name-badge');
   if (strategyNameBadge && evalData.strategy) {
@@ -259,66 +292,49 @@ function loadTradingViewWidget(symbol) {
 }
 
 // Load Embedded TradingView Single Quote Ticker Widget (Direct Capital.com Real-Time Stream)
-function loadSingleQuoteWidget(symbol) {
-  const container = document.getElementById('tradingview-quote-box');
-  if (!container) return;
-  container.innerHTML = '';
-
-  const tvSymbol = (symbol === 'GOLD') ? 'CAPITALCOM:GOLD' : 'CAPITALCOM:US100';
-
-  const widgetWrapper = document.createElement('div');
-  widgetWrapper.className = 'tradingview-widget-container';
-  
-  const widgetDiv = document.createElement('div');
-  widgetDiv.className = 'tradingview-widget-container__widget';
-  widgetWrapper.appendChild(widgetDiv);
-
-  const script = document.createElement('script');
-  script.type = 'text/javascript';
-  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-single-quote.js';
-  script.async = true;
-  script.innerHTML = JSON.stringify({
-    "symbol": tvSymbol,
-    "width": "100%",
-    "colorTheme": "dark",
-    "isTransparent": true,
-    "locale": "en"
-  });
-
-  widgetWrapper.appendChild(script);
-  container.appendChild(widgetWrapper);
-}
-
 // Asset Switcher
 function switchSymbol(symbol) {
   currentSymbol = symbol;
   const btnNas = document.getElementById('btn-nas100');
   const btnGold = document.getElementById('btn-gold');
   const cardSymbol = document.getElementById('card-symbol');
+  const tvLink = document.getElementById('tv-open-link');
 
   if (symbol === 'NAS100') {
     btnNas.className = 'flex-1 py-1.5 text-xs font-semibold rounded-lg bg-cyan-600 text-white shadow transition-all';
     btnGold.className = 'flex-1 py-1.5 text-xs font-semibold rounded-lg text-slate-400 hover:text-white transition-all';
     cardSymbol.textContent = 'NAS100 (Capital.com)';
+    if (tvLink) tvLink.href = 'https://www.tradingview.com/chart/?symbol=CAPITALCOM%3AUS100';
   } else {
     btnGold.className = 'flex-1 py-1.5 text-xs font-semibold rounded-lg bg-cyan-600 text-white shadow transition-all';
     btnNas.className = 'flex-1 py-1.5 text-xs font-semibold rounded-lg text-slate-400 hover:text-white transition-all';
     cardSymbol.textContent = 'GOLD (Capital.com)';
+    if (tvLink) tvLink.href = 'https://www.tradingview.com/chart/?symbol=CAPITALCOM%3AGOLD';
   }
 
   loadTradingViewWidget(symbol);
-  loadSingleQuoteWidget(symbol);
 
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ switch_symbol: symbol }));
   }
+  refreshStrategy();
 }
 
 // Strategy Switcher
-function switchStrategy(strategyId) {
+async function switchStrategy(strategyId) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ switch_strategy: strategyId }));
   }
+  try {
+    await fetch('/api/strategies/select', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ strategy_id: strategyId })
+    });
+  } catch (e) {
+    console.error('Error selecting strategy:', e);
+  }
+  refreshStrategy();
 }
 
 // Manual Strategy Refresh button handler
@@ -340,11 +356,11 @@ async function refreshStrategy() {
       }));
     }
 
-    // 2. Also fetch directly via REST for immediate re-evaluation and checklist render
+    // 2. Fetch directly via REST for immediate re-evaluation and instant checklist render
     const res = await fetch(`/api/refresh?symbol=${encodeURIComponent(currentSymbol)}&strategy_id=${encodeURIComponent(stratId)}&t=${Date.now()}`);
     if (res.ok) {
       const data = await res.json();
-      if (data && data.type === 'MARKET_UPDATE') {
+      if (data && (data.type === 'MARKET_UPDATE' || data.evaluation)) {
         renderMarketUpdate(data);
       }
     }
@@ -354,15 +370,27 @@ async function refreshStrategy() {
     setTimeout(() => {
       if (icon) icon.classList.remove('fa-spin');
       if (btn) btn.disabled = false;
-    }, 700);
+    }, 600);
   }
 }
 
 // Initialize on Load
 window.addEventListener('DOMContentLoaded', () => {
+  // 1. Fetch current status immediately so checklist renders on the very first frame
+  fetch('/api/status?t=' + Date.now())
+    .then(res => res.json())
+    .then(data => {
+      if (data && (data.type === 'MARKET_UPDATE' || data.evaluation)) {
+        renderMarketUpdate(data);
+      }
+    })
+    .catch(err => console.log('Initial status fetch error:', err));
+
+  // 2. Connect WebSocket
   connectWebSocket();
+
+  // 3. Mount TradingView chart widget
   setTimeout(() => {
     loadTradingViewWidget('NAS100');
-    loadSingleQuoteWidget('NAS100');
-  }, 300);
+  }, 200);
 });

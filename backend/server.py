@@ -76,7 +76,22 @@ def update_config(req: AccountConfigRequest):
     return {"success": True, "config": account_config}
 
 @app.get("/api/status")
-def get_status():
+async def get_status():
+    global latest_evaluation
+    if not latest_evaluation:
+        symbol = account_config.get("active_symbol", "NAS100")
+        data = await asyncio.to_thread(market_data_provider.get_market_data, symbol)
+        eval_result = strategy_mgr.evaluate_active(data, account_config)
+        latest_evaluation = {
+            "type": "MARKET_UPDATE",
+            "timestamp": data.get("timestamp"),
+            "symbol": symbol,
+            "current_price": data.get("current_price"),
+            "strategy_id": strategy_mgr.get_active_strategy_id(),
+            "evaluation": eval_result,
+            "is_alert": eval_result.get("decision") not in ["Wait / No trade", None],
+            "account_config": account_config
+        }
     return latest_evaluation
 
 @app.get("/api/refresh")
@@ -215,8 +230,21 @@ async def websocket_endpoint(websocket: WebSocket):
     connected_clients.add(websocket)
     try:
         # Send initial state immediately
-        if latest_evaluation:
-            await websocket.send_text(json.dumps(latest_evaluation))
+        if not latest_evaluation:
+            symbol = account_config.get("active_symbol", "NAS100")
+            data = await asyncio.to_thread(market_data_provider.get_market_data, symbol)
+            eval_result = strategy_mgr.evaluate_active(data, account_config)
+            latest_evaluation = {
+                "type": "MARKET_UPDATE",
+                "timestamp": data.get("timestamp"),
+                "symbol": symbol,
+                "current_price": data.get("current_price"),
+                "strategy_id": strategy_mgr.get_active_strategy_id(),
+                "evaluation": eval_result,
+                "is_alert": eval_result.get("decision") not in ["Wait / No trade", None],
+                "account_config": account_config
+            }
+        await websocket.send_text(json.dumps(latest_evaluation))
         while True:
             # Keep connection alive & receive client messages (e.g. symbol switch)
             data = await websocket.receive_text()
@@ -296,7 +324,7 @@ async def market_scanner_loop():
                 connected_clients.difference_update(disconnected)
                 
         except Exception as e:
-            pass
+            print(f"[Scanner Loop Error] {e}")
             
         await asyncio.sleep(1.5)
 

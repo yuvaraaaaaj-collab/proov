@@ -161,10 +161,14 @@ class ICTSilverBulletStrategy(BaseStrategy):
         min_framework = 1.5 if is_gold else 12.0  # 15 pips gold, 12 index points nasdaq
 
         # 4. Bearish Silver Bullet Setup (BSL Swept -> Bearish Displacement -> Bearish FVG)
-        if bsl_swept and len(c_1m) >= 6:
+        if bsl_swept and len(c_1m) >= 4:
             # Look for 1M Market Structure Shift (closing below previous swing low)
-            swing_lows = [c_1m[i]['low'] for i in range(-12, -2) 
-                          if c_1m[i]['low'] < c_1m[i-1]['low'] and c_1m[i]['low'] < c_1m[i+1]['low']]
+            start_i = max(1, len(c_1m) - 15)
+            end_i = max(1, len(c_1m) - 2)
+            swing_lows = [
+                c_1m[i]['low'] for i in range(start_i, end_i)
+                if c_1m[i]['low'] < c_1m[i-1]['low'] and c_1m[i]['low'] < c_1m[i+1]['low']
+            ]
             
             if swing_lows and current_price < swing_lows[-1]:
                 # Check for Displacement (energetic candle with body > 60% of range)
@@ -181,7 +185,8 @@ class ICTSilverBulletStrategy(BaseStrategy):
                     # Search for Fresh Bearish FVG in the last 5 candles
                     # Bearish FVG: Low of candle 1 > High of candle 3
                     fvg = None
-                    for idx in range(len(c_1m) - 2, len(c_1m) - 6, -1):
+                    min_idx = max(2, len(c_1m) - 6)
+                    for idx in range(len(c_1m) - 2, min_idx - 1, -1):
                         c1 = c_1m[idx - 2]
                         c2 = c_1m[idx - 1]
                         c3 = c_1m[idx]
@@ -237,10 +242,14 @@ class ICTSilverBulletStrategy(BaseStrategy):
                                 }
 
         # 5. Bullish Silver Bullet Setup (SSL Swept -> Bullish Displacement -> Bullish FVG)
-        elif ssl_swept and len(c_1m) >= 6:
+        elif ssl_swept and len(c_1m) >= 4:
             # Look for 1M Market Structure Shift (closing above previous swing high)
-            swing_highs = [c_1m[i]['high'] for i in range(-12, -2) 
-                           if c_1m[i]['high'] > c_1m[i-1]['high'] and c_1m[i]['high'] > c_1m[i+1]['high']]
+            start_i = max(1, len(c_1m) - 15)
+            end_i = max(1, len(c_1m) - 2)
+            swing_highs = [
+                c_1m[i]['high'] for i in range(start_i, end_i)
+                if c_1m[i]['high'] > c_1m[i-1]['high'] and c_1m[i]['high'] > c_1m[i+1]['high']
+            ]
             
             if swing_highs and current_price > swing_highs[-1]:
                 disp_candle = None
@@ -256,7 +265,8 @@ class ICTSilverBulletStrategy(BaseStrategy):
                     # Search for Fresh Bullish FVG in last 5 candles
                     # Bullish FVG: High of candle 1 < Low of candle 3
                     fvg = None
-                    for idx in range(len(c_1m) - 2, len(c_1m) - 6, -1):
+                    min_idx = max(2, len(c_1m) - 6)
+                    for idx in range(len(c_1m) - 2, min_idx - 1, -1):
                         c1 = c_1m[idx - 2]
                         c2 = c_1m[idx - 1]
                         c3 = c_1m[idx]

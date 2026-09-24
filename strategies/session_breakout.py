@@ -27,9 +27,13 @@ class SessionBreakoutStrategy(BaseStrategy):
                 "order_ticket": None
             }
 
-        range_candles = c_15m[-16:]
-        range_high = max([c['high'] for c in range_candles[:-2]])
-        range_low = min([c['low'] for c in range_candles[:-2]])
+        range_candles = c_15m[-16:] if len(c_15m) >= 16 else c_15m
+        if len(range_candles) >= 3:
+            range_high = max([c['high'] for c in range_candles[:-2]])
+            range_low = min([c['low'] for c in range_candles[:-2]])
+        else:
+            range_high = max([c['high'] for c in range_candles])
+            range_low = min([c['low'] for c in range_candles])
 
         checklist = {
             "Session Range High": round(range_high, 1),
