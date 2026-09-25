@@ -54,6 +54,7 @@ account_config = {
 
 connected_clients = set()
 latest_evaluation = {}
+last_valid_tickets = {}
 
 # Pydantic models for API
 class StrategySelectRequest(BaseModel):
@@ -166,8 +167,8 @@ async def trigger_test_alert(req: Dict[str, Any] = None):
 @app.get("/api/status")
 async def get_status():
     global latest_evaluation
+    symbol = account_config.get("active_symbol", "NAS100")
     if not latest_evaluation:
-        symbol = account_config.get("active_symbol", "NAS100")
         data = await asyncio.to_thread(market_data_provider.get_market_data, symbol)
         eval_result = strategy_mgr.evaluate_active(data, account_config)
         latest_evaluation = {
@@ -178,8 +179,11 @@ async def get_status():
             "strategy_id": strategy_mgr.get_active_strategy_id(),
             "evaluation": eval_result,
             "is_alert": eval_result.get("decision") not in ["Wait / No trade", None],
+            "last_valid_ticket": last_valid_tickets.get(symbol),
             "account_config": account_config
         }
+    else:
+        latest_evaluation["last_valid_ticket"] = last_valid_tickets.get(latest_evaluation.get("symbol", symbol))
     return latest_evaluation
 
 @app.get("/api/refresh")
@@ -201,6 +205,7 @@ async def trigger_refresh(symbol: str = None, strategy_id: str = None):
         "strategy_id": strategy_mgr.get_active_strategy_id(),
         "evaluation": eval_result,
         "is_alert": eval_result.get("decision") not in ["Wait / No trade", None],
+        "last_valid_ticket": last_valid_tickets.get(sym),
         "account_config": account_config
     }
     latest_evaluation = payload
@@ -330,8 +335,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 "strategy_id": strategy_mgr.get_active_strategy_id(),
                 "evaluation": eval_result,
                 "is_alert": eval_result.get("decision") not in ["Wait / No trade", None],
+                "last_valid_ticket": last_valid_tickets.get(symbol),
                 "account_config": account_config
             }
+        else:
+            latest_evaluation["last_valid_ticket"] = last_valid_tickets.get(latest_evaluation.get("symbol", account_config.get("active_symbol", "NAS100")))
         await websocket.send_text(json.dumps(latest_evaluation))
         while True:
             # Keep connection alive & receive client messages (e.g. symbol switch)
@@ -356,6 +364,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         "strategy_id": strategy_mgr.get_active_strategy_id(),
                         "evaluation": eval_result,
                         "is_alert": eval_result.get("decision") not in ["Wait / No trade", None],
+                        "last_valid_ticket": last_valid_tickets.get(sym),
                         "account_config": account_config
                     }
                     latest_evaluation = payload
@@ -403,6 +412,16 @@ async def market_scanner_loop():
                         and bool(ticket.get("Take Profit"))
                         and str(ticket.get("Stop Loss")) != "---"
                     )
+                    
+                    # Persist valid ticket so it stays constant and does not disappear across updates
+                    if has_valid_ticket and strat_id != "session_breakout":
+                        last_valid_tickets[symbol] = {
+                            **ticket,
+                            "strategy": eval_result.get("strategy", strat_id),
+                            "strategy_id": strat_id,
+                            "symbol": symbol,
+                            "timestamp": time.time()
+                        }
                     
                     is_new_alert = (
                         current_decision not in ["Wait / No trade", None]
@@ -474,6 +493,7 @@ async def market_scanner_loop():
                         "strategy_name": active_name,
                         "evaluation": active_eval,
                         "is_alert": is_active_alert,
+                        "last_valid_ticket": last_valid_tickets.get(symbol),
                         "account_config": account_config,
                         "radar": all_radar
                     }

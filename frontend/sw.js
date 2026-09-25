@@ -1,4 +1,4 @@
-const CACHE_NAME = 'trader-pro-v3.9';
+const CACHE_NAME = 'trader-pro-v3.10';
 const ASSETS = [
   '/',
   '/index.html',
@@ -48,9 +48,10 @@ self.addEventListener('push', (e) => {
   }
   const options = {
     body: data.body || 'New entry order ticket available',
-    vibrate: [200, 100, 200, 100, 400],
+    vibrate: [300, 150, 300, 150, 600],
     tag: 'trade-entry-alert',
     renotify: true,
+    requireInteraction: true,
     data: { url: '/' }
   };
   e.waitUntil(self.registration.showNotification(data.title, options));

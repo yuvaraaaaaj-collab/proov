@@ -158,6 +158,9 @@ function showCrossAlertToast(data) {
       <button id="toast-switch-btn" class="flex-1 py-1.5 text-xs font-bold rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white shadow transition-all">
         Switch to ${data.symbol} (${stratName})
       </button>
+      <button onclick="document.getElementById('cross-alert-toast')?.remove()" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300">
+        Dismiss
+      </button>
     </div>
   `;
 
@@ -175,12 +178,6 @@ function showCrossAlertToast(data) {
       toast.remove();
     });
   }
-
-  // Auto remove after 12 seconds
-  setTimeout(() => {
-    const el = document.getElementById('cross-alert-toast');
-    if (el) el.remove();
-  }, 12000);
 }
 
 // Render incoming market updates
@@ -268,32 +265,39 @@ function renderMarketUpdate(data) {
     }
   }
 
-  // 4. Order Ticket Card
+  // 4. Order Ticket Card (Persistent & Constant across updates)
   const orderCard = document.getElementById('order-card');
-  if (ticket) {
-    lastAlertTicket = ticket;
+  const storedTicket = lastAlertTicket || (data.last_valid_ticket && data.last_valid_ticket.symbol === data.symbol ? data.last_valid_ticket : null) || JSON.parse(localStorage.getItem('traderpro_last_ticket_' + data.symbol) || 'null');
+  
+  const displayTicket = ticket || storedTicket;
+
+  if (displayTicket) {
+    lastAlertTicket = displayTicket;
+    localStorage.setItem('traderpro_last_ticket_' + data.symbol, JSON.stringify(displayTicket));
     orderCard.classList.remove('hidden');
-    const isBuy = ticket['Order Type'].includes('BUY');
+
+    const isBuy = String(displayTicket['Order Type']).includes('BUY');
     orderCard.className = `bg-slate-900 border-2 rounded-2xl p-4 shadow-2xl relative transition-all duration-300 ${
       isBuy ? 'border-emerald-500 alert-glow-green' : 'border-rose-500 alert-glow-red'
     }`;
 
     const actionBadge = document.getElementById('ticket-action-badge');
-    actionBadge.textContent = ticket['Order Type'];
+    const isCurrentFresh = Boolean(ticket);
+    actionBadge.textContent = isCurrentFresh ? displayTicket['Order Type'] : `${displayTicket['Order Type']} (ACTIVE)`;
     actionBadge.className = `px-2.5 py-1 rounded-lg text-xs font-black tracking-wider uppercase border ${
       isBuy ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
     }`;
 
-    document.getElementById('ticket-entry').textContent = ticket['Entry Price'] || ticket['Entry'];
-    document.getElementById('ticket-sl').textContent = ticket['Stop Loss'];
-    document.getElementById('ticket-tp').textContent = ticket['Take Profit'];
-    document.getElementById('ticket-risk').textContent = ticket['Risk Amount'] || '$2.50 (0.25%)';
-    document.getElementById('ticket-gain').textContent = `${ticket['Projected Profit']} (${ticket['R:R']})`;
-    document.getElementById('ticket-consistency').textContent = ticket['Consistency Impact'] || 'Safe (< 15% Cap)';
-    document.getElementById('ticket-cancel').textContent = ticket['Cancel If'] || '---';
+    document.getElementById('ticket-entry').textContent = displayTicket['Entry Price'] || displayTicket['Entry'];
+    document.getElementById('ticket-sl').textContent = displayTicket['Stop Loss'];
+    document.getElementById('ticket-tp').textContent = displayTicket['Take Profit'];
+    document.getElementById('ticket-risk').textContent = displayTicket['Risk Amount'] || '$2.50 (0.25%)';
+    document.getElementById('ticket-gain').textContent = `${displayTicket['Projected Profit']} (${displayTicket['R:R']})`;
+    document.getElementById('ticket-consistency').textContent = displayTicket['Consistency Impact'] || 'Safe (< 15% Cap)';
+    document.getElementById('ticket-cancel').textContent = displayTicket['Cancel If'] || '---';
 
-    // Play alarm and trigger mobile push notification if new alert (disabled for session breakout)
-    if (data.is_alert && data.strategy_id !== 'session_breakout') {
+    // Play alarm and trigger mobile push notification ONLY when a fresh new signal is confirmed (not session breakout)
+    if (data.is_alert && data.strategy_id !== 'session_breakout' && isCurrentFresh) {
       playAlarmSound();
       triggerPushNotification(data.symbol, evalData.decision, ticket);
     }
@@ -357,6 +361,16 @@ Cancel If: ${lastAlertTicket['Cancel If']}
   navigator.clipboard.writeText(text).then(() => {
     alert('Order ticket copied to clipboard! You can paste it into notes or MT5 on your phone.');
   });
+}
+
+// Dismiss active ticket manually
+function dismissTicket() {
+  lastAlertTicket = null;
+  localStorage.removeItem('traderpro_last_ticket_' + currentSymbol);
+  const orderCard = document.getElementById('order-card');
+  if (orderCard) {
+    orderCard.classList.add('hidden');
+  }
 }
 
 // Load Embedded TradingView Live Chart Widget (Direct Capital.com Stream)
@@ -424,6 +438,7 @@ function loadSingleQuoteWidget(symbol) {
 // Asset Switcher
 function switchSymbol(symbol) {
   currentSymbol = symbol;
+  lastAlertTicket = JSON.parse(localStorage.getItem('traderpro_last_ticket_' + symbol) || 'null');
   const btnNas = document.getElementById('btn-nas100');
   const btnGold = document.getElementById('btn-gold');
   const cardSymbol = document.getElementById('card-symbol');
@@ -572,18 +587,26 @@ function triggerPushNotification(symbol, decision, ticket) {
     const gain = ticket['Projected Profit'] || '---';
     const body = `🎯 Entry: ${entry} | 🛑 SL: ${sl} | 💰 TP: ${tp} (R:R ${rr}) | 🛡️ Risk: ${risk} | 💵 Target: ${gain}`;
     
+    const notifOptions = {
+      body: body,
+      icon: '/manifest.json',
+      badge: '/manifest.json',
+      vibrate: [300, 150, 300, 150, 600],
+      tag: `traderpro-vip-${symbol}`,
+      renotify: true,
+      requireInteraction: true // Stays pinned in notification drawer / on screen until dismissed
+    };
+
     if (navigator.serviceWorker && navigator.serviceWorker.controller) {
       navigator.serviceWorker.ready.then(reg => {
-        reg.showNotification(title, {
-          body: body,
-          icon: '/manifest.json',
-          vibrate: [200, 100, 200, 100, 400],
-          tag: `trade-${symbol}-${Date.now()}`,
-          renotify: true
-        });
+        reg.showNotification(title, notifOptions);
       });
     } else {
-      new Notification(title, { body: body });
+      try {
+        new Notification(title, notifOptions);
+      } catch (_) {
+        new Notification(title, { body: body });
+      }
     }
   }
 }

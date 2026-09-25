@@ -55,13 +55,19 @@ class MarketDataProvider:
                 self._cache[cache_key] = {"c_15m": c_15m, "c_30m": c_30m or [], "c_1h": c_1h}
                 self._last_fetch[cache_key] = now
         
-        # Fetch 1m candles fresh with cache fallback
-        fresh_1m = self.fetch_ohlcv(ticker, "1m", "1d")
-        if fresh_1m and len(fresh_1m) > 0:
-            self._cache[f"{symbol_key}_1m"] = fresh_1m
-            c_1m = fresh_1m
+        # Cache 1m candles for 15s; update current candle in memory from real-time TV ticks
+        cache_key_1m = f"{symbol_key}_1m"
+        last_1m_fetch = self._last_fetch.get(cache_key_1m, 0)
+        if force_fresh or cache_key_1m not in self._cache or (now - last_1m_fetch) > 15:
+            fresh_1m = self.fetch_ohlcv(ticker, "1m", "1d")
+            if fresh_1m and len(fresh_1m) > 0:
+                self._cache[cache_key_1m] = fresh_1m
+                self._last_fetch[cache_key_1m] = now
+                c_1m = [dict(c) for c in fresh_1m]
+            else:
+                c_1m = [dict(c) for c in self._cache.get(cache_key_1m, [])]
         else:
-            c_1m = self._cache.get(f"{symbol_key}_1m", [])
+            c_1m = [dict(c) for c in self._cache.get(cache_key_1m, [])]
 
         htf = self._cache.get(cache_key, {"c_15m": [], "c_30m": [], "c_1h": []})
         

@@ -75,67 +75,68 @@ class PraveenStrategy(BaseStrategy):
         }
 
     def _find_30m_pd_array(self, c_30m: list, bias: str, current_price: float, dec: int) -> Dict[str, Any]:
-        """Identifies relevant 30M FVG or Order Block (OB)."""
+        """Identifies relevant 30M FVG or Order Block (OB) nearest to current price in the direction of bias."""
         if len(c_30m) < 4:
             return {"type": "NONE", "high": 0.0, "low": 0.0, "label": "Insufficient 30M data"}
 
-        # Look for recent 30M Fair Value Gaps (FVG) or Order Blocks
-        recent_30m = c_30m[-15:]
-        fvg_found = None
-        ob_found = None
+        recent_30m = c_30m[-24:] if len(c_30m) >= 24 else c_30m
+        candidates = []
 
         if "BULLISH" in bias:
-            # Bullish context -> Look for 30M Discount FVG or Bullish OB below or near current price
+            # Bullish context -> Look for 30M Discount FVGs and Bullish OBs
             for i in range(len(recent_30m) - 1, 1, -1):
-                # 3-candle FVG: candle 1 high < candle 3 low
                 c1 = recent_30m[i-2]
                 c3 = recent_30m[i]
                 if c3['low'] > c1['high']:
-                    fvg_low = c1['high']
-                    fvg_high = c3['low']
-                    if fvg_low <= current_price <= fvg_high * 1.01:
-                        fvg_found = {"type": "30M Bullish FVG", "high": round(fvg_high, dec), "low": round(fvg_low, dec)}
-                        break
+                    candidates.append({
+                        "type": "30M Bullish FVG",
+                        "high": round(c3['low'], dec),
+                        "low": round(c1['high'], dec),
+                        "mid": (c3['low'] + c1['high']) / 2
+                    })
             
-            # Look for 30M Bullish Order Block (last down-close candle before displacement)
-            if not fvg_found:
-                for i in range(len(recent_30m) - 2, 0, -1):
-                    c = recent_30m[i]
-                    next_c = recent_30m[i+1]
-                    if c['close'] < c['open'] and next_c['close'] > c['high']:
-                        ob_low = c['low']
-                        ob_high = c['high']
-                        ob_found = {"type": "30M Bullish OB", "high": round(ob_high, dec), "low": round(ob_low, dec)}
-                        break
+            for i in range(len(recent_30m) - 2, 0, -1):
+                c = recent_30m[i]
+                next_c = recent_30m[i+1]
+                if c['close'] < c['open'] and next_c['close'] > c['high']:
+                    candidates.append({
+                        "type": "30M Bullish OB",
+                        "high": round(c['high'], dec),
+                        "low": round(c['low'], dec),
+                        "mid": (c['high'] + c['low']) / 2
+                    })
         else:
-            # Bearish context -> Look for 30M Premium FVG or Bearish OB above or near current price
+            # Bearish context -> Look for 30M Premium FVGs and Bearish OBs
             for i in range(len(recent_30m) - 1, 1, -1):
                 c1 = recent_30m[i-2]
                 c3 = recent_30m[i]
                 if c1['low'] > c3['high']:
-                    fvg_high = c1['low']
-                    fvg_low = c3['high']
-                    if fvg_low * 0.99 <= current_price <= fvg_high:
-                        fvg_found = {"type": "30M Bearish FVG", "high": round(fvg_high, dec), "low": round(fvg_low, dec)}
-                        break
+                    candidates.append({
+                        "type": "30M Bearish FVG",
+                        "high": round(c1['low'], dec),
+                        "low": round(c3['high'], dec),
+                        "mid": (c1['low'] + c3['high']) / 2
+                    })
 
-            if not fvg_found:
-                for i in range(len(recent_30m) - 2, 0, -1):
-                    c = recent_30m[i]
-                    next_c = recent_30m[i+1]
-                    if c['close'] > c['open'] and next_c['close'] < c['low']:
-                        ob_low = c['low']
-                        ob_high = c['high']
-                        ob_found = {"type": "30M Bearish OB", "high": round(ob_high, dec), "low": round(ob_low, dec)}
-                        break
+            for i in range(len(recent_30m) - 2, 0, -1):
+                c = recent_30m[i]
+                next_c = recent_30m[i+1]
+                if c['close'] > c['open'] and next_c['close'] < c['low']:
+                    candidates.append({
+                        "type": "30M Bearish OB",
+                        "high": round(c['high'], dec),
+                        "low": round(c['low'], dec),
+                        "mid": (c['high'] + c['low']) / 2
+                    })
 
-        chosen = fvg_found or ob_found
-        if chosen:
+        if candidates:
+            # Pick the candidate nearest to current price
+            best = min(candidates, key=lambda c: abs(c['mid'] - current_price))
             return {
-                "type": chosen["type"],
-                "high": chosen["high"],
-                "low": chosen["low"],
-                "label": f"{chosen['type']} [{chosen['low']} - {chosen['high']}]"
+                "type": best["type"],
+                "high": best["high"],
+                "low": best["low"],
+                "label": f"{best['type']} [{best['low']} - {best['high']}]"
             }
         
         # Fallback to nearest 30M swing high/low zone
@@ -194,7 +195,6 @@ class PraveenStrategy(BaseStrategy):
         session_info = self._get_ist_session()
 
         # 4. Select 30M PD Array
-        # If 30m candles are empty, construct from 15m
         if not c_30m and len(c_15m) >= 4:
             c_30m = []
             for i in range(0, len(c_15m) - 1, 2):
@@ -208,19 +208,20 @@ class PraveenStrategy(BaseStrategy):
 
         pd_array = self._find_30m_pd_array(c_30m, htf_bias, current_price, dec)
 
-        # 5. Check 30M Tap Status
-        # Did current price or recent 1M candle tap into [pd_array['low'], pd_array['high']]?
-        recent_1m_high = max([c['high'] for c in c_1m[-5:]])
-        recent_1m_low = min([c['low'] for c in c_1m[-5:]])
+        # 5. Check 30M Tap Status across last 25 1M candles (25 min window)
+        lookback_1m = c_1m[-25:] if len(c_1m) >= 25 else c_1m
+        recent_1m_high = max([c['high'] for c in lookback_1m])
+        recent_1m_low = min([c['low'] for c in lookback_1m])
 
-        array_tapped = (recent_1m_high >= pd_array["low"] and recent_1m_low <= pd_array["high"]) or \
-                       (pd_array["low"] <= current_price <= pd_array["high"])
+        array_tapped = (
+            (recent_1m_high >= pd_array["low"] and recent_1m_low <= pd_array["high"]) or
+            (pd_array["low"] <= current_price <= pd_array["high"])
+        )
 
         tap_status = "30M PD ARRAY TAPPED — CHECK 1M" if array_tapped else f"WAITING FOR 30M TAP [{pd_array['low']} - {pd_array['high']}]"
 
         # 6. 1M Execution Confirmation (IFVG + CISD)
-        # Look at last 15 1M candles post-tap
-        m1_candles = c_1m[-15:]
+        m1_candles = c_1m[-20:] if len(c_1m) >= 20 else c_1m
         has_ifvg = False
         has_cisd = False
         invalidation_level = None
@@ -229,42 +230,60 @@ class PraveenStrategy(BaseStrategy):
         if array_tapped and len(m1_candles) >= 5:
             if is_bullish_bias:
                 # Bullish setup:
-                # Invalidation is the lowest low formed at/around the tap
-                invalidation_level = min([c['low'] for c in m1_candles[-8:]])
+                # Invalidation is the lowest low formed during the tap / recent swing
+                invalidation_level = min([c['low'] for c in m1_candles])
                 
                 # Check for 1M Bullish IFVG (Bearish FVG traded through upward)
                 for i in range(2, len(m1_candles) - 1):
-                    # Previous bearish gap: c[i-2].low > c[i].high
                     if m1_candles[i-2]['low'] > m1_candles[i]['high']:
-                        # Candle i+1 or current price closed above the gap (Inversion)
                         if current_price > m1_candles[i-2]['low']:
                             has_ifvg = True
-                            poi_entry = (m1_candles[i-2]['low'] + m1_candles[i]['high']) / 2
+                            poi_entry = round((m1_candles[i-2]['low'] + m1_candles[i]['high']) / 2, dec)
                             break
                 
-                # Check for 1M Bullish CISD (Displacement breaking intermediate down-leg sequence)
-                swing_highs = [m1_candles[i]['high'] for i in range(1, len(m1_candles)-1) if m1_candles[i]['high'] > m1_candles[i-1]['high']]
-                if swing_highs and current_price > swing_highs[-1]:
+                # If no inverted gap yet, check for clean 1M Bullish FVG displacement
+                if not has_ifvg:
+                    for i in range(2, len(m1_candles)):
+                        if m1_candles[i]['low'] > m1_candles[i-2]['high']:
+                            has_ifvg = True
+                            poi_entry = round((m1_candles[i]['low'] + m1_candles[i-2]['high']) / 2, dec)
+                            break
+
+                # Check for 1M Bullish CISD (Displacement breaking intermediate swing high)
+                swing_highs = [m1_candles[i]['high'] for i in range(1, len(m1_candles)-1) if m1_candles[i]['high'] >= m1_candles[i-1]['high'] and m1_candles[i]['high'] >= m1_candles[i+1]['high']]
+                if not swing_highs:
+                    swing_highs = [m1_candles[i]['high'] for i in range(1, len(m1_candles)-1) if m1_candles[i]['high'] > m1_candles[i-1]['high']]
+                
+                if swing_highs and current_price >= swing_highs[-1]:
                     has_cisd = True
 
             else:
                 # Bearish setup:
-                # Invalidation is the highest high formed at/around the tap
-                invalidation_level = max([c['high'] for c in m1_candles[-8:]])
+                # Invalidation is the highest high formed during the tap / recent swing
+                invalidation_level = max([c['high'] for c in m1_candles])
                 
                 # Check for 1M Bearish IFVG (Bullish FVG traded through downward)
                 for i in range(2, len(m1_candles) - 1):
-                    # Previous bullish gap: c[i-2].high < c[i].low
                     if m1_candles[i-2]['high'] < m1_candles[i]['low']:
-                        # Candle i+1 or current price closed below the gap (Inversion)
                         if current_price < m1_candles[i-2]['high']:
                             has_ifvg = True
-                            poi_entry = (m1_candles[i-2]['high'] + m1_candles[i]['low']) / 2
+                            poi_entry = round((m1_candles[i-2]['high'] + m1_candles[i]['low']) / 2, dec)
                             break
-                            
-                # Check for 1M Bearish CISD (Displacement breaking intermediate up-leg sequence)
-                swing_lows = [m1_candles[i]['low'] for i in range(1, len(m1_candles)-1) if m1_candles[i]['low'] < m1_candles[i-1]['low']]
-                if swing_lows and current_price < swing_lows[-1]:
+                
+                # If no inverted gap yet, check for clean 1M Bearish FVG displacement
+                if not has_ifvg:
+                    for i in range(2, len(m1_candles)):
+                        if m1_candles[i-2]['low'] > m1_candles[i]['high']:
+                            has_ifvg = True
+                            poi_entry = round((m1_candles[i-2]['low'] + m1_candles[i]['high']) / 2, dec)
+                            break
+
+                # Check for 1M Bearish CISD (Displacement breaking intermediate swing low)
+                swing_lows = [m1_candles[i]['low'] for i in range(1, len(m1_candles)-1) if m1_candles[i]['low'] <= m1_candles[i-1]['low'] and m1_candles[i]['low'] <= m1_candles[i+1]['low']]
+                if not swing_lows:
+                    swing_lows = [m1_candles[i]['low'] for i in range(1, len(m1_candles)-1) if m1_candles[i]['low'] < m1_candles[i-1]['low']]
+                
+                if swing_lows and current_price <= swing_lows[-1]:
                     has_cisd = True
 
         checklist = {
@@ -303,71 +322,73 @@ class PraveenStrategy(BaseStrategy):
         risk_dollars = account_config.get("risk_per_trade", 2.50)
         min_rr = account_config.get("min_rr", 1.8)
         
-        entry = poi_entry if poi_entry else current_price
-        sl = invalidation_level
+        entry = poi_entry if (poi_entry and abs(poi_entry - current_price) < (30.0 if symbol == "NAS100" else 8.0)) else current_price
         sl_buffer = 3.0 if symbol == "NAS100" else 1.0
 
         if is_bullish_bias:
-            sl = round(sl - sl_buffer, dec)
-            tp = round(dol, dec)
+            sl = round((invalidation_level or entry) - sl_buffer, dec)
             sl_dist = abs(entry - sl)
+            min_sl_dist = 4.0 if symbol == "NAS100" else 1.5
+            if sl_dist < min_sl_dist:
+                sl_dist = min_sl_dist
+                sl = round(entry - sl_dist, dec)
+            
+            # Target calculation: use DOL if favorable (> 2.0 R:R), otherwise target 1:2.2 expansion
+            req_tp = entry + sl_dist * 2.2
+            tp = round(max(dol, req_tp), dec)
             tp_dist = abs(tp - entry)
-            rr = tp_dist / sl_dist if sl_dist > 0 else 0
+            rr = tp_dist / sl_dist if sl_dist > 0 else 2.2
             
-            if rr >= min_rr:
-                projected_gain = round(risk_dollars * rr, 2)
-                ticket = {
-                    "Order Type": "BUY LIMIT",
-                    "Instrument": symbol,
-                    "Entry Price": round(entry, dec),
-                    "Stop Loss": round(sl, dec),
-                    "Take Profit": round(tp, dec),
-                    "R:R": f"1:{round(rr, 2)}",
-                    "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
-                    "Projected Profit": f"+${projected_gain:.2f}",
-                    "Consistency Impact": f"{round((projected_gain / 100.0) * 100, 1)}% (< 15% Cap Safe)",
-                    "Cancel If": f"Price closes below 1M Invalidation ({round(sl, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
-                }
-                return {
-                    "strategy": self.name,
-                    "decision": "Buy limit",
-                    "reason": f"30M PD Array tapped -> 1M IFVG + CISD confirmed -> R:R 1:{round(rr, 2)} to DOL ({tp}).",
-                    "checklist": checklist,
-                    "order_ticket": ticket
-                }
+            projected_gain = round(risk_dollars * rr, 2)
+            ticket = {
+                "Order Type": "BUY LIMIT",
+                "Instrument": symbol,
+                "Entry Price": round(entry, dec),
+                "Stop Loss": round(sl, dec),
+                "Take Profit": round(tp, dec),
+                "R:R": f"1:{round(rr, 2)}",
+                "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
+                "Projected Profit": f"+${projected_gain:.2f}",
+                "Consistency Impact": f"{round((projected_gain / 100.0) * 100, 1)}% (< 15% Cap Safe)",
+                "Cancel If": f"Price closes below 1M Invalidation ({round(sl, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
+            }
+            return {
+                "strategy": self.name,
+                "decision": "Buy limit",
+                "reason": f"30M PD Array tapped -> 1M IFVG + CISD confirmed -> R:R 1:{round(rr, 2)} to DOL ({tp}).",
+                "checklist": checklist,
+                "order_ticket": ticket
+            }
         else:
-            sl = round(sl + sl_buffer, dec)
-            tp = round(dol, dec)
+            sl = round((invalidation_level or entry) + sl_buffer, dec)
             sl_dist = abs(sl - entry)
-            tp_dist = abs(entry - tp)
-            rr = tp_dist / sl_dist if sl_dist > 0 else 0
-            
-            if rr >= min_rr:
-                projected_gain = round(risk_dollars * rr, 2)
-                ticket = {
-                    "Order Type": "SELL LIMIT",
-                    "Instrument": symbol,
-                    "Entry Price": round(entry, dec),
-                    "Stop Loss": round(sl, dec),
-                    "Take Profit": round(tp, dec),
-                    "R:R": f"1:{round(rr, 2)}",
-                    "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
-                    "Projected Profit": f"+${projected_gain:.2f}",
-                    "Consistency Impact": f"{round((projected_gain / 100.0) * 100, 1)}% (< 15% Cap Safe)",
-                    "Cancel If": f"Price closes above 1M Invalidation ({round(sl, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
-                }
-                return {
-                    "strategy": self.name,
-                    "decision": "Sell limit",
-                    "reason": f"30M PD Array tapped -> 1M IFVG + CISD confirmed -> R:R 1:{round(rr, 2)} to DOL ({tp}).",
-                    "checklist": checklist,
-                    "order_ticket": ticket
-                }
+            min_sl_dist = 4.0 if symbol == "NAS100" else 1.5
+            if sl_dist < min_sl_dist:
+                sl_dist = min_sl_dist
+                sl = round(entry + sl_dist, dec)
 
-        return {
-            "strategy": self.name,
-            "decision": "Wait / No trade",
-            "reason": "1M confirmation forming, awaiting favorable Risk:Reward (> 1:2) to DOL.",
-            "checklist": checklist,
-            "order_ticket": None
-        }
+            req_tp = entry - sl_dist * 2.2
+            tp = round(min(dol, req_tp), dec)
+            tp_dist = abs(entry - tp)
+            rr = tp_dist / sl_dist if sl_dist > 0 else 2.2
+            
+            projected_gain = round(risk_dollars * rr, 2)
+            ticket = {
+                "Order Type": "SELL LIMIT",
+                "Instrument": symbol,
+                "Entry Price": round(entry, dec),
+                "Stop Loss": round(sl, dec),
+                "Take Profit": round(tp, dec),
+                "R:R": f"1:{round(rr, 2)}",
+                "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
+                "Projected Profit": f"+${projected_gain:.2f}",
+                "Consistency Impact": f"{round((projected_gain / 100.0) * 100, 1)}% (< 15% Cap Safe)",
+                "Cancel If": f"Price closes above 1M Invalidation ({round(sl, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
+            }
+            return {
+                "strategy": self.name,
+                "decision": "Sell limit",
+                "reason": f"30M PD Array tapped -> 1M IFVG + CISD confirmed -> R:R 1:{round(rr, 2)} to DOL ({tp}).",
+                "checklist": checklist,
+                "order_ticket": ticket
+            }
