@@ -15,8 +15,8 @@ class TradingViewFeed:
     """
     def __init__(self):
         self._quotes = {
-            "NAS100": {"price": 30250.0, "high": 30515.0, "low": 30075.0, "updated_at": 0},
-            "GOLD": {"price": 4255.0, "high": 4300.0, "low": 4240.0, "updated_at": 0}
+            "NAS100": {"price": 0.0, "high": 0.0, "low": 0.0, "updated_at": 0},
+            "GOLD": {"price": 0.0, "high": 0.0, "low": 0.0, "updated_at": 0}
         }
         self._candles = {
             "NAS100": [],

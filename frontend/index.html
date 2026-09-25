@@ -148,13 +148,18 @@
     <!-- Active Order Alert Box (Hidden until trade setup triggers) -->
     <div id="order-card" class="hidden bg-slate-900 border-2 rounded-2xl p-4 shadow-2xl relative transition-all duration-300">
       <div class="flex items-center justify-between pb-2 border-b border-slate-800">
-        <div class="flex items-center space-x-2">
-          <span id="ticket-action-badge" class="px-2.5 py-1 rounded-lg text-xs font-black tracking-wider uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-            BUY LIMIT
-          </span>
-          <span class="text-xs font-bold text-slate-300">ORDER TICKET</span>
+        <div class="flex flex-col sm:flex-row sm:items-center gap-1.5 min-w-0">
+          <div class="flex items-center gap-2 min-w-0">
+            <span id="ticket-action-badge" class="px-2.5 py-1 rounded-lg text-xs font-black tracking-wider uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex-shrink-0">
+              BUY LIMIT
+            </span>
+            <span id="ticket-strategy-name" class="text-xs font-bold text-cyan-400 px-2.5 py-0.5 rounded-lg bg-cyan-950/80 border border-cyan-800/60 truncate max-w-[200px]" title="Strategy">
+              SMC Master
+            </span>
+          </div>
+          <span id="ticket-time-badge" class="text-[10px] text-slate-400 font-mono">Signal Active</span>
         </div>
-        <div class="flex items-center gap-1.5">
+        <div class="flex items-center gap-1.5 flex-shrink-0">
           <button onclick="copyTicket()" class="px-2.5 py-1 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold rounded-lg flex items-center gap-1 shadow">
             <i class="fa-regular fa-copy"></i>
             <span>COPY</span>
@@ -359,6 +364,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=3.10"></script>
+  <script src="/app.js?v=3.11"></script>
 </body>
 </html>

@@ -220,6 +220,13 @@ async def trigger_refresh(symbol: str = None, strategy_id: str = None):
                 pass
     return payload
 
+@app.post("/api/alerts/dismiss")
+def dismiss_alert(req: Dict[str, Any] = None):
+    sym = (req or {}).get("symbol", account_config.get("active_symbol", "NAS100"))
+    if sym in last_valid_tickets:
+        del last_valid_tickets[sym]
+    return {"status": "cleared", "symbol": sym}
+
 @app.get("/api/price")
 @app.get("/api/webhook")
 async def get_price_update(price: float, symbol: str = "NAS100"):
@@ -395,6 +402,27 @@ async def market_scanner_loop():
                 # Fetch fresh market data
                 data = await asyncio.to_thread(market_data_provider.get_market_data, symbol)
                 current_price = data.get("current_price", 0.0)
+                
+                # Automatic cleanup of stale or price-invalidated tickets
+                exist_t = last_valid_tickets.get(symbol)
+                if exist_t:
+                    t_age = time.time() - exist_t.get("timestamp", 0)
+                    t_entry = float(exist_t.get("Entry Price") or exist_t.get("Entry") or 0)
+                    t_sl = float(exist_t.get("Stop Loss") or 0)
+                    t_tp = float(exist_t.get("Take Profit") or 0)
+                    is_buy = "BUY" in str(exist_t.get("Order Type", "")).upper()
+                    
+                    is_stale = (t_age > 1500)
+                    if current_price > 0 and t_sl > 0 and t_tp > 0:
+                        if is_buy and (current_price <= t_sl or current_price >= t_tp):
+                            is_stale = True
+                        elif not is_buy and (current_price >= t_sl or current_price <= t_tp):
+                            is_stale = True
+                        max_dist = 40.0 if symbol == "GOLD" else 200.0
+                        if abs(current_price - t_entry) > max_dist:
+                            is_stale = True
+                    if is_stale:
+                        del last_valid_tickets[symbol]
                 
                 # Concurrently evaluate ALL registered strategies on this symbol!
                 all_evals = strategy_mgr.evaluate_all(data, account_config)
