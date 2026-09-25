@@ -58,6 +58,10 @@
           <i id="sound-icon" class="fa-solid fa-volume-high text-emerald-400"></i>
           <span class="hidden sm:inline text-[11px]">Audio</span>
         </button>
+        <button id="alerts-btn" onclick="openAlertsModal()" class="p-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-xs flex items-center gap-1.5" title="Telegram & Phone Alerts">
+          <i class="fa-solid fa-bell text-amber-400"></i>
+          <span class="hidden sm:inline text-[11px]">Alerts</span>
+        </button>
         <button id="install-btn" class="hidden px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-medium text-xs shadow-md shadow-cyan-600/30">
           <i class="fa-solid fa-download mr-1"></i> Install
         </button>
@@ -233,6 +237,120 @@
     TraderPro Mobile Engine &bull; Auto Updates Per Sec
   </footer>
 
-  <script src="/app.js?v=3.4"></script>
+  <!-- VIP Access Passcode Gate (Only User & Friends Allowed) -->
+  <div id="vip-gate-overlay" class="hidden fixed inset-0 z-50 bg-slate-950 flex flex-col items-center justify-center p-4">
+    <div class="max-w-sm w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 text-center shadow-2xl space-y-4">
+      <div class="w-16 h-16 mx-auto rounded-2xl bg-cyan-600/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 text-2xl shadow-inner">
+        <i class="fa-solid fa-shield-halved"></i>
+      </div>
+      <div>
+        <h2 class="text-lg font-bold text-white tracking-wide">TraderPro VIP Access</h2>
+        <p class="text-xs text-slate-400 mt-1">Private Terminal &bull; Enter your 4-digit PIN</p>
+      </div>
+      
+      <div class="py-2">
+        <input id="vip-pin-input" type="password" maxlength="6" inputmode="numeric" placeholder="••••" 
+          class="w-44 text-center text-2xl tracking-[0.5em] font-mono font-bold bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-xl py-2 px-3 outline-none mx-auto block">
+        <div id="vip-pin-error" class="hidden text-rose-400 text-xs mt-2 font-medium">Invalid PIN. Access Denied.</div>
+      </div>
+
+      <button onclick="submitVipPin()" class="w-full py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 text-white font-bold text-sm shadow-lg shadow-cyan-600/25 active:scale-95 transition-all">
+        Unlock Terminal
+      </button>
+      
+      <p class="text-[11px] text-slate-500">Only authorized phones with the VIP passcode can access real-time signals.</p>
+    </div>
+  </div>
+
+  <!-- Alerts & Notifications Modal -->
+  <div id="alerts-modal" class="hidden fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+      <div class="flex justify-between items-center pb-2 border-b border-slate-800">
+        <h3 class="text-sm font-bold text-white flex items-center gap-2">
+          <i class="fa-solid fa-bell text-amber-400"></i>
+          Alerts & Notification Dispatcher
+        </h3>
+        <button onclick="closeAlertsModal()" class="text-slate-400 hover:text-white text-base">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <!-- Phone Push Notifications -->
+      <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2">
+        <div class="flex justify-between items-center">
+          <div>
+            <div class="text-xs font-bold text-slate-200">📱 Phone Push Alerts</div>
+            <div class="text-[10px] text-slate-400">Lock screen & banner notifications when data is ON</div>
+          </div>
+          <button id="enable-push-btn" onclick="requestNotificationAccess()" class="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-cyan-600 text-white shadow">
+            Enable
+          </button>
+        </div>
+      </div>
+
+      <!-- Telegram Alerts (Direct to Phone / Group) -->
+      <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2.5">
+        <div class="flex justify-between items-center">
+          <div>
+            <div class="text-xs font-bold text-cyan-400 flex items-center gap-1.5">
+              <i class="fa-brands fa-telegram text-sm"></i> Telegram Bot Alerts (Instant & Free)
+            </div>
+            <div class="text-[10px] text-slate-400">Rings your phone & friends' phones on every trade</div>
+          </div>
+          <input type="checkbox" id="cfg-tg-enabled" class="accent-cyan-500 w-4 h-4 cursor-pointer">
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-[10px] uppercase font-bold text-slate-400">Telegram Bot Token</label>
+          <input id="cfg-tg-token" type="text" placeholder="e.g. 7123456789:AAH..." class="w-full text-xs font-mono bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 outline-none focus:border-cyan-500">
+          
+          <label class="text-[10px] uppercase font-bold text-slate-400 mt-1 block">Chat IDs (Yours & Friends, comma-separated)</label>
+          <input id="cfg-tg-chats" type="text" placeholder="e.g. 123456789, 987654321" class="w-full text-xs font-mono bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 outline-none focus:border-cyan-500">
+          <div class="text-[10px] text-slate-500">💡 Message <b>@userinfobot</b> on Telegram to get your Chat ID instantly.</div>
+        </div>
+      </div>
+
+      <!-- WhatsApp Alerts -->
+      <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2.5">
+        <div class="flex justify-between items-center">
+          <div>
+            <div class="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+              <i class="fa-brands fa-whatsapp text-sm"></i> WhatsApp Alerts (CallMeBot)
+            </div>
+            <div class="text-[10px] text-slate-400">Direct WhatsApp message with entry details</div>
+          </div>
+          <input type="checkbox" id="cfg-wa-enabled" class="accent-emerald-500 w-4 h-4 cursor-pointer">
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-[10px] uppercase font-bold text-slate-400">CallMeBot API Key</label>
+          <input id="cfg-wa-apikey" type="text" placeholder="Your CallMeBot API key" class="w-full text-xs font-mono bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500">
+          
+          <label class="text-[10px] uppercase font-bold text-slate-400 mt-1 block">Phone Numbers (comma-separated with +country code)</label>
+          <input id="cfg-wa-phones" type="text" placeholder="e.g. +919876543210, +919123456789" class="w-full text-xs font-mono bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-slate-200 outline-none focus:border-emerald-500">
+        </div>
+      </div>
+
+      <!-- VIP Security PIN -->
+      <div class="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
+        <div class="text-xs font-bold text-slate-300">🔐 VIP Access Passcode</div>
+        <div class="text-[10px] text-slate-400">The 4-digit code required to open the app on your phone & friends' phones</div>
+        <input id="cfg-vip-pin" type="text" maxlength="6" class="w-32 text-xs font-mono font-bold bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 text-white outline-none focus:border-cyan-500">
+      </div>
+
+      <div id="alert-settings-status" class="hidden text-xs text-center font-bold"></div>
+
+      <div class="flex gap-2 pt-1">
+        <button onclick="testNotificationAlert()" class="flex-1 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-400 font-bold text-xs border border-slate-700 flex items-center justify-center gap-1.5">
+          <i class="fa-solid fa-paper-plane"></i>
+          <span>Send Test Alert</span>
+        </button>
+        <button onclick="saveNotificationSettings()" class="flex-1 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs shadow-lg shadow-cyan-600/30 flex items-center justify-center gap-1.5">
+          <i class="fa-solid fa-floppy-disk"></i>
+          <span>Save Settings</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js?v=3.5"></script>
 </body>
 </html>

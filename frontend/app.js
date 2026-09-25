@@ -202,9 +202,10 @@ function renderMarketUpdate(data) {
     document.getElementById('ticket-consistency').textContent = ticket['Consistency Impact'] || 'Safe (< 15% Cap)';
     document.getElementById('ticket-cancel').textContent = ticket['Cancel If'] || '---';
 
-    // Play alarm if new alert
+    // Play alarm and trigger mobile push notification if new alert
     if (data.is_alert) {
       playAlarmSound();
+      triggerPushNotification(data.symbol, evalData.decision, ticket);
     }
   } else {
     orderCard.classList.add('hidden');
@@ -413,8 +414,221 @@ async function refreshStrategy() {
   }
 }
 
+// -------------------------------------------------------------
+// VIP Access Passcode Security (For User & Friends Only)
+// -------------------------------------------------------------
+function checkVipAuth() {
+  const isAuth = localStorage.getItem('traderpro_vip_auth');
+  const overlay = document.getElementById('vip-gate-overlay');
+  if (isAuth === '1') {
+    if (overlay) overlay.classList.add('hidden');
+  } else {
+    if (overlay) overlay.classList.remove('hidden');
+    const input = document.getElementById('vip-pin-input');
+    if (input) input.focus();
+  }
+}
+
+async function submitVipPin() {
+  const pinInput = document.getElementById('vip-pin-input');
+  const errEl = document.getElementById('vip-pin-error');
+  const pin = pinInput?.value || '';
+  
+  if (!pin) return;
+  
+  try {
+    const res = await fetch('/api/auth/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: pin })
+    });
+    const data = await res.json();
+    if (data.valid) {
+      localStorage.setItem('traderpro_vip_auth', '1');
+      const overlay = document.getElementById('vip-gate-overlay');
+      if (overlay) overlay.classList.add('hidden');
+      if (errEl) errEl.classList.add('hidden');
+    } else {
+      if (errEl) errEl.classList.remove('hidden');
+      if (pinInput) {
+        pinInput.value = '';
+        pinInput.focus();
+      }
+    }
+  } catch (e) {
+    console.error('PIN verification error:', e);
+  }
+}
+
+// -------------------------------------------------------------
+// Mobile Push Notifications
+// -------------------------------------------------------------
+function triggerPushNotification(symbol, decision, ticket) {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'granted') {
+    const title = `🚨 TRADERPRO VIP: ${decision.toUpperCase()} on ${symbol}`;
+    const entry = ticket ? (ticket['Entry Price'] || ticket['Entry']) : 'Market';
+    const sl = ticket ? ticket['Stop Loss'] : '---';
+    const tp = ticket ? ticket['Take Profit'] : '---';
+    const body = `Entry: ${entry} | SL: ${sl} | TP: ${tp} | Risk: $2.50`;
+    
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.ready.then(reg => {
+        reg.showNotification(title, {
+          body: body,
+          icon: '/manifest.json',
+          vibrate: [200, 100, 200, 100, 400],
+          tag: 'trade-entry-alert',
+          renotify: true
+        });
+      });
+    } else {
+      new Notification(title, { body: body });
+    }
+  }
+}
+
+async function requestNotificationAccess() {
+  if (!('Notification' in window)) {
+    alert('Notifications are not supported on this browser.');
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  const btn = document.getElementById('enable-push-btn');
+  if (perm === 'granted') {
+    if (btn) {
+      btn.textContent = 'Active ✅';
+      btn.className = 'px-2.5 py-1 text-[11px] font-bold rounded-lg bg-emerald-600 text-white';
+    }
+    // Test notification immediately
+    triggerPushNotification(currentSymbol, 'TEST ENTRY ALERT (ACTIVE)', {
+      'Entry Price': '30250.0',
+      'Stop Loss': '30230.0',
+      'Take Profit': '30295.0'
+    });
+  } else {
+    if (btn) btn.textContent = 'Blocked ❌';
+  }
+}
+
+// -------------------------------------------------------------
+// Alerts & Notification Dispatcher Modal
+// -------------------------------------------------------------
+async function openAlertsModal() {
+  const modal = document.getElementById('alerts-modal');
+  if (modal) modal.classList.remove('hidden');
+  
+  const pushBtn = document.getElementById('enable-push-btn');
+  if (pushBtn && 'Notification' in window && Notification.permission === 'granted') {
+    pushBtn.textContent = 'Active ✅';
+    pushBtn.className = 'px-2.5 py-1 text-[11px] font-bold rounded-lg bg-emerald-600 text-white';
+  }
+
+  try {
+    const res = await fetch('/api/alerts/settings');
+    if (res.ok) {
+      const cfg = await res.json();
+      document.getElementById('cfg-tg-enabled').checked = !!cfg.telegram_enabled;
+      document.getElementById('cfg-tg-token').value = cfg.telegram_bot_token || '';
+      document.getElementById('cfg-tg-chats').value = (cfg.telegram_chat_ids || []).join(', ');
+      
+      document.getElementById('cfg-wa-enabled').checked = !!cfg.whatsapp_enabled;
+      document.getElementById('cfg-wa-apikey').value = cfg.whatsapp_apikey || '';
+      document.getElementById('cfg-wa-phones').value = (cfg.whatsapp_phones || []).join(', ');
+      
+      document.getElementById('cfg-vip-pin').value = cfg.vip_pin || '7788';
+    }
+  } catch (e) {
+    console.error('Error loading alert settings:', e);
+  }
+}
+
+function closeAlertsModal() {
+  const modal = document.getElementById('alerts-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+async function saveNotificationSettings() {
+  const statusEl = document.getElementById('alert-settings-status');
+  const tgChats = document.getElementById('cfg-tg-chats').value.split(',').map(s => s.trim()).filter(Boolean);
+  const waPhones = document.getElementById('cfg-wa-phones').value.split(',').map(s => s.trim()).filter(Boolean);
+  
+  const payload = {
+    telegram_enabled: document.getElementById('cfg-tg-enabled').checked,
+    telegram_bot_token: document.getElementById('cfg-tg-token').value.trim(),
+    telegram_chat_ids: tgChats,
+    whatsapp_enabled: document.getElementById('cfg-wa-enabled').checked,
+    whatsapp_apikey: document.getElementById('cfg-wa-apikey').value.trim(),
+    whatsapp_phones: waPhones,
+    vip_pin: document.getElementById('cfg-vip-pin').value.trim() || '7788'
+  };
+
+  try {
+    const res = await fetch('/api/alerts/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) {
+      if (statusEl) {
+        statusEl.className = 'text-xs text-center font-bold text-emerald-400';
+        statusEl.textContent = 'Settings Saved Successfully!';
+        statusEl.classList.remove('hidden');
+        setTimeout(() => statusEl.classList.add('hidden'), 3000);
+      }
+    }
+  } catch (e) {
+    if (statusEl) {
+      statusEl.className = 'text-xs text-center font-bold text-rose-400';
+      statusEl.textContent = 'Failed to save settings.';
+      statusEl.classList.remove('hidden');
+    }
+  }
+}
+
+async function testNotificationAlert() {
+  const statusEl = document.getElementById('alert-settings-status');
+  if (statusEl) {
+    statusEl.className = 'text-xs text-center font-bold text-cyan-400';
+    statusEl.textContent = 'Sending Test Alert to Phone & Telegram...';
+    statusEl.classList.remove('hidden');
+  }
+
+  // Trigger local alarm and browser push
+  playAlarmSound();
+  triggerPushNotification(currentSymbol, 'BUY LIMIT (TEST)', {
+    'Entry Price': '30250.0',
+    'Stop Loss': '30230.0',
+    'Take Profit': '30295.0'
+  });
+
+  try {
+    const res = await fetch('/api/alerts/test', { method: 'POST' });
+    const data = await res.json();
+    if (statusEl) {
+      statusEl.className = 'text-xs text-center font-bold text-emerald-400';
+      statusEl.textContent = 'Test Alert Dispatched! Check your Phone & Telegram.';
+      setTimeout(() => statusEl.classList.add('hidden'), 4000);
+    }
+  } catch (e) {
+    if (statusEl) {
+      statusEl.className = 'text-xs text-center font-bold text-rose-400';
+      statusEl.textContent = 'Error sending test alert.';
+    }
+  }
+}
+
 // Initialize on Load
 window.addEventListener('DOMContentLoaded', () => {
+  // 0. Check VIP Authentication
+  checkVipAuth();
+  const pinInput = document.getElementById('vip-pin-input');
+  if (pinInput) {
+    pinInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitVipPin();
+    });
+  }
+
   // 1. Fetch current status immediately so checklist renders on the very first frame
   fetch('/api/status?t=' + Date.now())
     .then(res => res.json())

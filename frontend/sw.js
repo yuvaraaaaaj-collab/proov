@@ -1,4 +1,4 @@
-const CACHE_NAME = 'trader-pro-v3.4';
+const CACHE_NAME = 'trader-pro-v3.5';
 const ASSETS = [
   '/',
   '/index.html',
@@ -33,5 +33,42 @@ self.addEventListener('fetch', (e) => {
   // Network first, fallback to cache
   e.respondWith(
     fetch(e.request).catch(() => caches.match(e.request))
+  );
+});
+
+// Background Push Notification handler (Lock screen & sound)
+self.addEventListener('push', (e) => {
+  let data = { title: '🚨 TraderPro VIP Alert', body: 'New trade entry setup formed!' };
+  if (e.data) {
+    try {
+      data = e.data.json();
+    } catch (_) {
+      data = { title: '🚨 TraderPro VIP Alert', body: e.data.text() };
+    }
+  }
+  const options = {
+    body: data.body || 'New entry order ticket available',
+    vibrate: [200, 100, 200, 100, 400],
+    tag: 'trade-entry-alert',
+    renotify: true,
+    data: { url: '/' }
+  };
+  e.waitUntil(self.registration.showNotification(data.title, options));
+});
+
+// Click notification to open TraderPro
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      if (clients.openWindow) {
+        return clients.openWindow('/');
+      }
+    })
   );
 });

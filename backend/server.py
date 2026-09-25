@@ -15,6 +15,15 @@ sys.path.insert(0, str(BASE_DIR))
 
 from strategies.strategy_manager import StrategyManager
 from backend.market_data import MarketDataProvider
+from backend.notifier import (
+    load_alert_settings,
+    save_alert_settings,
+    dispatch_trade_alert,
+    send_telegram,
+    send_whatsapp_callmebot,
+    format_telegram_message,
+    format_plain_message
+)
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -74,6 +83,63 @@ def update_config(req: AccountConfigRequest):
     account_config["risk_per_trade"] = req.risk_per_trade
     account_config["active_symbol"] = req.active_symbol
     return {"success": True, "config": account_config}
+
+class PinVerifyRequest(BaseModel):
+    pin: str
+
+@app.post("/api/auth/verify")
+def verify_pin(req: PinVerifyRequest):
+    settings = load_alert_settings()
+    correct_pin = str(settings.get("vip_pin", "7788")).strip()
+    user_pin = str(req.pin).strip()
+    return {"valid": user_pin == correct_pin}
+
+@app.get("/api/alerts/settings")
+def get_alert_settings():
+    return load_alert_settings()
+
+@app.post("/api/alerts/settings")
+def update_alert_settings(req: Dict[str, Any]):
+    current = load_alert_settings()
+    current.update(req)
+    success = save_alert_settings(current)
+    return {"success": success, "settings": current}
+
+@app.post("/api/alerts/test")
+async def trigger_test_alert(req: Dict[str, Any] = None):
+    settings = load_alert_settings()
+    results = {}
+    test_eval = {
+        "decision": "Buy limit",
+        "reason": "Test Signal: 15M SSL Swept -> 1M Bullish MSS + FVG entry setup.",
+        "order_ticket": {
+            "Order Type": "BUY LIMIT (TEST)",
+            "Entry Price": 30250.0,
+            "Stop Loss": 30230.0,
+            "Take Profit": 30295.0,
+            "R:R": "1:2.3",
+            "Risk Amount": "$2.50 (Goat Safe)",
+            "Projected Profit": "+$5.75"
+        }
+    }
+    
+    # 1. Test Telegram
+    if settings.get("telegram_bot_token") and settings.get("telegram_chat_ids"):
+        msg = format_telegram_message("NAS100", "SMC Master (TEST)", test_eval, 30250.0)
+        tg_res = await asyncio.to_thread(send_telegram, settings["telegram_bot_token"], settings["telegram_chat_ids"], msg)
+        results["telegram"] = tg_res
+    else:
+        results["telegram"] = "Telegram not configured or disabled"
+        
+    # 2. Test WhatsApp
+    if settings.get("whatsapp_apikey") and settings.get("whatsapp_phones"):
+        wa_msg = format_plain_message("NAS100", "SMC Master (TEST)", test_eval, 30250.0)
+        wa_res = await asyncio.to_thread(send_whatsapp_callmebot, settings["whatsapp_phones"], settings["whatsapp_apikey"], wa_msg)
+        results["whatsapp"] = wa_res
+    else:
+        results["whatsapp"] = "WhatsApp not configured or disabled"
+        
+    return {"status": "dispatched", "results": results}
 
 @app.get("/api/status")
 async def get_status():
@@ -298,6 +364,14 @@ async def market_scanner_loop():
             current_decision = eval_result.get("decision", "Wait / No trade")
             is_new_alert = (current_decision != "Wait / No trade") and (current_decision != last_decision)
             last_decision = current_decision
+            
+            if is_new_alert:
+                asyncio.create_task(dispatch_trade_alert(
+                    symbol,
+                    strategy_mgr.get_active_strategy_id(),
+                    eval_result,
+                    data.get("current_price", 0.0)
+                ))
             
             payload = {
                 "type": "MARKET_UPDATE",
