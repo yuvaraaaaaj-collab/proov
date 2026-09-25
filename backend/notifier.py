@@ -6,7 +6,11 @@ import urllib.parse
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import requests
-import httpx
+try:
+    import httpx
+    HAS_HTTPX = True
+except ImportError:
+    HAS_HTTPX = False
 
 logger = logging.getLogger("notifier")
 
@@ -24,14 +28,16 @@ DEFAULT_SETTINGS = {
 }
 
 _cached_settings: Optional[Dict[str, Any]] = None
-_async_http_client: Optional[httpx.AsyncClient] = None
+_async_http_client = None
 
-def get_async_http_client() -> httpx.AsyncClient:
+def get_async_http_client():
     global _async_http_client
-    if _async_http_client is None or _async_http_client.is_closed:
-        limits = httpx.Limits(max_keepalive_connections=20, max_connections=40, keepalive_expiry=60.0)
-        _async_http_client = httpx.AsyncClient(timeout=4.0, limits=limits)
-    return _async_http_client
+    if HAS_HTTPX:
+        if _async_http_client is None or getattr(_async_http_client, "is_closed", False):
+            limits = httpx.Limits(max_keepalive_connections=20, max_connections=40, keepalive_expiry=60.0)
+            _async_http_client = httpx.AsyncClient(timeout=4.0, limits=limits)
+        return _async_http_client
+    return None
 
 def load_alert_settings() -> Dict[str, Any]:
     global _cached_settings
@@ -118,6 +124,9 @@ async def async_send_telegram(bot_token: str, chat_ids: List[str], text: str) ->
         return {"error": "Missing bot token or chat ID"}
     
     client = get_async_http_client()
+    if not client:
+        return await asyncio.to_thread(send_telegram, bot_token, chat_ids, text)
+
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     
     async def send_single(cid: str):
@@ -151,6 +160,9 @@ async def async_send_whatsapp(phones: List[str], apikey: str, text: str) -> Dict
         return {"error": "Missing CallMeBot apikey or phone number"}
     
     client = get_async_http_client()
+    if not client:
+        return await asyncio.to_thread(send_whatsapp_callmebot, phones, apikey, text)
+
     encoded_text = urllib.parse.quote(text)
     
     async def send_single_wa(phone: str):
