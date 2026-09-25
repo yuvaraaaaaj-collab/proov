@@ -20,6 +20,8 @@ from backend.notifier import (
     load_alert_settings,
     save_alert_settings,
     dispatch_trade_alert,
+    async_send_telegram,
+    async_send_whatsapp,
     send_telegram,
     send_whatsapp_callmebot,
     format_telegram_message,
@@ -146,18 +148,18 @@ async def trigger_test_alert(req: Dict[str, Any] = None):
         }
     }
     
-    # 1. Test Telegram
+    # 1. Test Telegram (Instant Async)
     if settings.get("telegram_bot_token") and settings.get("telegram_chat_ids"):
         msg = format_telegram_message(sym, f"TraderPro VIP ({sym} Test)", test_eval, entry)
-        tg_res = await asyncio.to_thread(send_telegram, settings["telegram_bot_token"], settings["telegram_chat_ids"], msg)
+        tg_res = await async_send_telegram(settings["telegram_bot_token"], settings["telegram_chat_ids"], msg)
         results["telegram"] = tg_res
     else:
         results["telegram"] = "Telegram not configured or disabled"
         
-    # 2. Test WhatsApp
+    # 2. Test WhatsApp (Instant Async)
     if settings.get("whatsapp_apikey") and settings.get("whatsapp_phones"):
         wa_msg = format_plain_message(sym, f"TraderPro VIP ({sym} Test)", test_eval, entry)
-        wa_res = await asyncio.to_thread(send_whatsapp_callmebot, settings["whatsapp_phones"], settings["whatsapp_apikey"], wa_msg)
+        wa_res = await async_send_whatsapp(settings["whatsapp_phones"], settings["whatsapp_apikey"], wa_msg)
         results["whatsapp"] = wa_res
     else:
         results["whatsapp"] = "WhatsApp not configured or disabled"

@@ -44,10 +44,43 @@ class MarketDataProvider:
     def get_market_data(self, symbol_key: str = "NAS100", force_fresh: bool = False) -> Dict[str, Any]:
         ticker = self.symbols.get(symbol_key, "NQ=F")
         now = time.time()
+        decimals = 2 if "gold" in symbol_key.lower() else 1
         
-        # Cache HTF (15m, 30m, 1h) for 30s to keep it fast (bypassed on force_fresh)
+        # 1. LIVE ZERO-DELAY 1M CANDLES directly from TradingView real-time stream
+        tv_candles = tv_feed.get_candles(symbol_key)
+        tv_price = tv_feed.get_price(symbol_key)
+        tv_quote = tv_feed.get_quote(symbol_key)
+        tv_high = tv_quote.get("high", 0.0)
+        tv_low = tv_quote.get("low", 0.0)
+        
+        broker_offset = self._cache.get(f"{symbol_key}_offset", 0.0)
+        
+        if tv_candles and len(tv_candles) >= 10:
+            c_1m = [dict(c) for c in tv_candles]
+            current_price = tv_price if tv_price > 0 else c_1m[-1]['close']
+            c_1m[-1]['close'] = current_price
+            c_1m[-1]['high'] = max(c_1m[-1]['high'], current_price)
+            c_1m[-1]['low'] = min(c_1m[-1]['low'], current_price)
+            broker_offset = 0.0
+        else:
+            # Fallback to cache while TV stream initializes
+            cache_key_1m = f"{symbol_key}_1m"
+            last_1m_fetch = self._last_fetch.get(cache_key_1m, 0)
+            if force_fresh or cache_key_1m not in self._cache or (now - last_1m_fetch) > 30:
+                fresh_1m = self.fetch_ohlcv(ticker, "1m", "1d")
+                if fresh_1m and len(fresh_1m) > 0:
+                    self._cache[cache_key_1m] = fresh_1m
+                    self._last_fetch[cache_key_1m] = now
+                    c_1m = [dict(c) for c in fresh_1m]
+                else:
+                    c_1m = [dict(c) for c in self._cache.get(cache_key_1m, [])]
+            else:
+                c_1m = [dict(c) for c in self._cache.get(cache_key_1m, [])]
+            current_price = tv_price if tv_price > 0 else (c_1m[-1]['close'] if c_1m else 0.0)
+
+        # 2. HTF (15m, 30m, 1h) cached for 300s (5 minutes) so it never delays the live scanner
         cache_key = f"{symbol_key}_htf"
-        if force_fresh or cache_key not in self._cache or (now - self._last_fetch.get(cache_key, 0)) > 30:
+        if force_fresh or cache_key not in self._cache or (now - self._last_fetch.get(cache_key, 0)) > 300:
             c_15m = self.fetch_ohlcv(ticker, "15m", "5d")
             c_30m = self.fetch_ohlcv(ticker, "30m", "5d")
             c_1h = self.fetch_ohlcv(ticker, "1h", "1mo")
@@ -55,59 +88,21 @@ class MarketDataProvider:
                 self._cache[cache_key] = {"c_15m": c_15m, "c_30m": c_30m or [], "c_1h": c_1h}
                 self._last_fetch[cache_key] = now
         
-        # Cache 1m candles for 15s; update current candle in memory from real-time TV ticks
-        cache_key_1m = f"{symbol_key}_1m"
-        last_1m_fetch = self._last_fetch.get(cache_key_1m, 0)
-        if force_fresh or cache_key_1m not in self._cache or (now - last_1m_fetch) > 15:
-            fresh_1m = self.fetch_ohlcv(ticker, "1m", "1d")
-            if fresh_1m and len(fresh_1m) > 0:
-                self._cache[cache_key_1m] = fresh_1m
-                self._last_fetch[cache_key_1m] = now
-                c_1m = [dict(c) for c in fresh_1m]
-            else:
-                c_1m = [dict(c) for c in self._cache.get(cache_key_1m, [])]
-        else:
-            c_1m = [dict(c) for c in self._cache.get(cache_key_1m, [])]
-
         htf = self._cache.get(cache_key, {"c_15m": [], "c_30m": [], "c_1h": []})
         
-        # Base broker offset for Capital.com quotes
-        default_offset = 0.0
-        broker_offset = self._cache.get(f"{symbol_key}_offset", default_offset)
-        
-        current_price = c_1m[-1]['close'] if c_1m else 0.0
-        decimals = 2 if "gold" in symbol_key.lower() else 1
-        
-        # 1. Check TradingView real-time feed for exact Capital.com tick
-        tv_price = tv_feed.get_price(symbol_key)
-        tv_quote = tv_feed.get_quote(symbol_key)
-        tv_high = tv_quote.get("high", 0.0)
-        tv_low = tv_quote.get("low", 0.0)
-        
-        # 2. Check for webhook override
-        has_active_webhook = False
+        # 3. Check for webhook override
         if symbol_key in self._cache.get("overrides", {}):
             override = self._cache["overrides"][symbol_key]
             override_age = now - override.get("updated_at", 0)
             if override_age < 6:
                 current_price = override.get("price", current_price)
-                has_active_webhook = True
                 if c_1m:
                     broker_offset = current_price - c_1m[-1]['close']
                     self._cache[f"{symbol_key}_offset"] = broker_offset
 
-        if not has_active_webhook:
-            if tv_price > 0:
-                current_price = tv_price
-                if c_1m:
-                    broker_offset = current_price - c_1m[-1]['close']
-                    self._cache[f"{symbol_key}_offset"] = broker_offset
-            else:
-                current_price = round(current_price + broker_offset, decimals)
-
-        # Calibrate candle levels with broker offset so PDH/PDL, BSL/SSL and 1M structure align with Capital.com
+        # Calibrate candle levels with broker offset if needed
         if broker_offset != 0.0:
-            if c_1m:
+            if not tv_candles:
                 calibrated_1m = []
                 for c in c_1m:
                     calibrated_1m.append({
