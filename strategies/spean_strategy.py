@@ -204,16 +204,6 @@ class SPEANStrategy(BaseStrategy):
             "FAH 7-LAYER CONFLUENCE": f"{fah_str} ({'ALL PASSED' if passed_count == 7 else 'FORMING'})"
         }
 
-        # Stand aside if outside Q-Zone
-        if not q_info["is_active"]:
-            return {
-                "strategy": self.name,
-                "decision": "Wait / No trade",
-                "reason": "Outside SPEAN Q Zone. Strategy strictly operates during London (07:00-10:00 UTC) or NY (13:30-16:30 UTC) Q Zones.",
-                "checklist": checklist,
-                "order_ticket": None
-            }
-
         # Stand aside if liquidity not taken
         if not liquidity_taken:
             return {

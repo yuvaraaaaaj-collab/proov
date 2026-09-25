@@ -279,16 +279,6 @@ class PraveenStrategy(BaseStrategy):
             "9. Execution & Goat Safe": "SAFE ($2.50 Risk | 1:2+ R:R | <15% Cap)"
         }
 
-        # Stand aside if outside session window
-        if not session_info["is_active"]:
-            return {
-                "strategy": self.name,
-                "decision": "Wait / No trade",
-                "reason": f"Outside Praveen Strategy checking window. Wait for Asia (05:30 IST), London (12:30 IST), or NY (19:00 IST).",
-                "checklist": checklist,
-                "order_ticket": None
-            }
-
         # Stand aside if 30M PD array is not yet tapped
         if not array_tapped:
             return {

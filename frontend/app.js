@@ -97,7 +97,10 @@ function connectWebSocket() {
       if (data.type === 'MARKET_UPDATE') {
         renderMarketUpdate(data);
       } else if (data.type === 'CROSS_ALERT') {
-        // Multi-strategy alert triggered on another symbol or background strategy
+        // Notification push explicitly disabled for Session Momentum Breakout
+        if (data.strategy_id === 'session_breakout' || String(data.strategy_name).toLowerCase().includes('breakout')) {
+          return;
+        }
         playAlarmSound();
         const stratName = data.strategy_name || data.strategy_id;
         const decision = data.evaluation?.decision || 'Trade Signal';
@@ -289,8 +292,8 @@ function renderMarketUpdate(data) {
     document.getElementById('ticket-consistency').textContent = ticket['Consistency Impact'] || 'Safe (< 15% Cap)';
     document.getElementById('ticket-cancel').textContent = ticket['Cancel If'] || '---';
 
-    // Play alarm and trigger mobile push notification if new alert
-    if (data.is_alert) {
+    // Play alarm and trigger mobile push notification if new alert (disabled for session breakout)
+    if (data.is_alert && data.strategy_id !== 'session_breakout') {
       playAlarmSound();
       triggerPushNotification(data.symbol, evalData.decision, ticket);
     }

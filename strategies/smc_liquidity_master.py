@@ -57,10 +57,10 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
         bsl_15m = max([c['high'] for c in recent_15m[:-1]]) if len(recent_15m) > 1 else recent_15m[0]['high']
         ssl_15m = min([c['low'] for c in recent_15m[:-1]]) if len(recent_15m) > 1 else recent_15m[0]['low']
 
-        # 4. Session Timing (NY Session: 12:00 to 20:00 UTC)
+        # 4. Session Timing (NY Session: 12:00 to 20:00 UTC is Priority Window)
         now_utc = datetime.datetime.utcnow()
         is_ny_session = 12 <= now_utc.hour <= 20
-        session_label = "Pre-NY / NY Session (Prime Window)" if is_ny_session else "Asian / Euro Session (Lower Probability)"
+        session_label = f"Pre-NY / NY Session [{now_utc.strftime('%H:%M')} UTC] (Priority Window)" if is_ny_session else f"Asian / Euro Session [{now_utc.strftime('%H:%M')} UTC] (Active 24H Scan)"
 
         # 5. Liquidity Sweep Detection (Past 12 1M candles)
         recent_1m_high = max([c['high'] for c in c_1m[-12:]])
@@ -89,16 +89,7 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
         risk_dollars = account_config.get("risk_per_trade", 2.50)
         min_rr = account_config.get("min_rr", 1.8)
 
-        # 6. Evaluation of 1M Structure Post-Sweep
-        if not is_ny_session:
-            return {
-                "strategy": self.name,
-                "decision": "Wait / No trade",
-                "reason": f"Outside Pre-NY / NY prime window [{now_utc.strftime('%H:%M')} UTC]. SMC Master executes during 12:00-20:00 UTC.",
-                "checklist": checklist,
-                "order_ticket": None
-            }
-
+        # 6. Evaluation of 1M Structure Post-Sweep (Active 24H Continuous Scan)
         if bsl_swept and len(c_1m) >= 4:
             # Look for 1M Bearish BOS (closing below recent 1M swing low)
             start_i = max(1, len(c_1m) - 15)

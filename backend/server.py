@@ -414,7 +414,8 @@ async def market_scanner_loop():
                     strat_name = eval_result.get("strategy", strat_id)
                     
                     # Whenever ANY strategy detects a valid entry on EITHER NAS100 or GOLD:
-                    if is_new_alert:
+                    # Note: Notification push is explicitly disabled for session momentum breakout
+                    if is_new_alert and strat_id != "session_breakout":
                         # 1. Dispatch background alerts: Telegram, WhatsApp, etc.
                         asyncio.create_task(dispatch_trade_alert(
                             symbol,
@@ -450,6 +451,7 @@ async def market_scanner_loop():
                         active_eval.get("decision") not in ["Wait / No trade", None]
                         and isinstance(active_ticket, dict)
                         and bool(active_ticket.get("Entry Price") or active_ticket.get("Entry"))
+                        and active_strat != "session_breakout"
                     )
                     active_name = active_eval.get("strategy", active_strat)
                     

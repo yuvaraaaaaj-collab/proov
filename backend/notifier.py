@@ -137,6 +137,11 @@ def send_whatsapp_callmebot(phones: List[str], apikey: str, text: str) -> Dict[s
     return results
 
 async def dispatch_trade_alert(symbol: str, strategy_name: str, eval_data: Dict[str, Any], current_price: float):
+    # Disable notification push for Session Momentum Breakout
+    if "session momentum breakout" in str(strategy_name).lower() or "session_breakout" in str(strategy_name).lower():
+        logger.info(f"Notification push is disabled for {strategy_name}.")
+        return
+
     # Enforce non-empty order ticket before dispatching any VIP alert
     ticket = eval_data.get("order_ticket")
     if not isinstance(ticket, dict) or not ticket.get("Stop Loss") or str(ticket.get("Stop Loss")) == "---":

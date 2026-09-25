@@ -143,21 +143,11 @@ class ICTSilverBulletStrategy(BaseStrategy):
             "Goat $1k Compliance": "SAFE ($2.50 Risk | 1:2+ R:R | <15% Cap)"
         }
 
-        # Rule: Stand aside if outside designated 60-minute window
-        if not window_info["is_active"]:
-            return {
-                "strategy": self.name,
-                "decision": "Wait / No trade",
-                "reason": f"Outside Silver Bullet window. Strategy requires entry inside 03:00-04:00, 10:00-11:00, or 14:00-15:00 NY time.",
-                "checklist": checklist,
-                "order_ticket": None
-            }
-
         if not bsl_swept and not ssl_swept:
             return {
                 "strategy": self.name,
                 "decision": "Wait / No trade",
-                "reason": f"Active in {window_info['label']}. Monitoring 15M BSL ({round(bsl_15m, 1)}) and SSL ({round(ssl_15m, 1)}) for liquidity raid.",
+                "reason": f"Active in {window_info['label']}. Monitoring 15M BSL ({round(bsl_15m, dec)}) and SSL ({round(ssl_15m, dec)}) for liquidity raid.",
                 "checklist": checklist,
                 "order_ticket": None
             }
