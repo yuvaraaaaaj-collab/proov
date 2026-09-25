@@ -347,48 +347,92 @@ async def websocket_endpoint(websocket: WebSocket):
         if websocket in connected_clients:
             connected_clients.remove(websocket)
 
-# Background scanner loop running every second (Dual Symbol Continuous Monitoring)
+# Background scanner loop running every 1.5 seconds (Multi-Strategy, Dual-Symbol Concurrent Engine)
 async def market_scanner_loop():
     global latest_evaluation
-    last_decision = {"NAS100": "Wait / No trade", "GOLD": "Wait / No trade"}
+    # Tracks last decision per (symbol, strategy_id)
+    last_decision = {}
     symbols_to_scan = ["NAS100", "GOLD"]
     
     while True:
         try:
             active_sym = account_config.get("active_symbol", "NAS100")
+            active_strat = strategy_mgr.get_active_strategy_id()
+            
             for symbol in symbols_to_scan:
                 # Fetch fresh market data
                 data = await asyncio.to_thread(market_data_provider.get_market_data, symbol)
+                current_price = data.get("current_price", 0.0)
                 
-                # Evaluate active strategy
-                eval_result = strategy_mgr.evaluate_active(data, account_config)
+                # Concurrently evaluate ALL registered strategies on this symbol!
+                all_evals = strategy_mgr.evaluate_all(data, account_config)
                 
-                # Check for alert trigger per symbol
-                current_decision = eval_result.get("decision", "Wait / No trade")
-                prev_decision = last_decision.get(symbol, "Wait / No trade")
-                is_new_alert = (current_decision != "Wait / No trade") and (current_decision != prev_decision)
-                last_decision[symbol] = current_decision
+                # Check for alert triggers across all strategies
+                for strat_id, eval_result in all_evals.items():
+                    current_decision = eval_result.get("decision", "Wait / No trade")
+                    key = (symbol, strat_id)
+                    prev_decision = last_decision.get(key, "Wait / No trade")
+                    is_new_alert = (current_decision not in ["Wait / No trade", None]) and (current_decision != prev_decision)
+                    last_decision[key] = current_decision
+                    
+                    strat_name = eval_result.get("strategy", strat_id)
+                    
+                    # Whenever ANY strategy detects a valid entry on EITHER NAS100 or GOLD:
+                    if is_new_alert:
+                        # 1. Dispatch background alerts: Telegram, WhatsApp, etc.
+                        asyncio.create_task(dispatch_trade_alert(
+                            symbol,
+                            strat_name,
+                            eval_result,
+                            current_price
+                        ))
+                        
+                        # 2. If this alert is NOT the exact symbol + strategy currently on screen, broadcast a CROSS_ALERT
+                        if not (symbol == active_sym and strat_id == active_strat):
+                            alert_payload = {
+                                "type": "CROSS_ALERT",
+                                "symbol": symbol,
+                                "current_price": current_price,
+                                "strategy_id": strat_id,
+                                "strategy_name": strat_name,
+                                "evaluation": eval_result,
+                                "is_alert": True
+                            }
+                            if connected_clients:
+                                msg_str = json.dumps(alert_payload)
+                                for client in list(connected_clients):
+                                    try:
+                                        await client.send_text(msg_str)
+                                    except Exception:
+                                        pass
                 
-                # Dispatch mobile push, Telegram & WhatsApp alerts for BOTH NAS100 AND GOLD!
-                if is_new_alert:
-                    asyncio.create_task(dispatch_trade_alert(
-                        symbol,
-                        strategy_mgr.get_active_strategy_id(),
-                        eval_result,
-                        data.get("current_price", 0.0)
-                    ))
-                
-                # If this is the active symbol being viewed on screen, broadcast to clients
+                # If this is the active symbol being viewed on screen, broadcast its active strategy update
                 if symbol == active_sym:
+                    active_eval = all_evals.get(active_strat, {})
+                    is_active_alert = active_eval.get("decision") not in ["Wait / No trade", None]
+                    active_name = active_eval.get("strategy", active_strat)
+                    
+                    # Prepare multi-strategy radar summary for UI
+                    all_radar = {
+                        s_id: {
+                            "name": ev.get("strategy", s_id),
+                            "decision": ev.get("decision", "Wait / No trade"),
+                            "has_setup": ev.get("decision") not in ["Wait / No trade", None]
+                        }
+                        for s_id, ev in all_evals.items()
+                    }
+                    
                     payload = {
                         "type": "MARKET_UPDATE",
                         "timestamp": data.get("timestamp"),
                         "symbol": symbol,
-                        "current_price": data.get("current_price"),
-                        "strategy_id": strategy_mgr.get_active_strategy_id(),
-                        "evaluation": eval_result,
-                        "is_alert": is_new_alert,
-                        "account_config": account_config
+                        "current_price": current_price,
+                        "strategy_id": active_strat,
+                        "strategy_name": active_name,
+                        "evaluation": active_eval,
+                        "is_alert": is_active_alert,
+                        "account_config": account_config,
+                        "radar": all_radar
                     }
                     latest_evaluation = payload
                     if connected_clients:
@@ -400,23 +444,6 @@ async def market_scanner_loop():
                             except Exception:
                                 disconnected.add(client)
                         connected_clients.difference_update(disconnected)
-                elif is_new_alert:
-                    # Even if not the screen active symbol, notify connected client about cross-symbol alert (e.g. Gold)
-                    alert_payload = {
-                        "type": "CROSS_ALERT",
-                        "symbol": symbol,
-                        "current_price": data.get("current_price"),
-                        "strategy_id": strategy_mgr.get_active_strategy_id(),
-                        "evaluation": eval_result,
-                        "is_alert": True
-                    }
-                    if connected_clients:
-                        msg_str = json.dumps(alert_payload)
-                        for client in list(connected_clients):
-                            try:
-                                await client.send_text(msg_str)
-                            except Exception:
-                                pass
                                 
         except Exception as e:
             print(f"[Scanner Loop Error] {e}")

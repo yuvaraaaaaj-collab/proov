@@ -97,9 +97,12 @@ function connectWebSocket() {
       if (data.type === 'MARKET_UPDATE') {
         renderMarketUpdate(data);
       } else if (data.type === 'CROSS_ALERT') {
-        // Background alert triggered on another symbol (e.g. Gold alert while viewing NAS100)
+        // Multi-strategy alert triggered on another symbol or background strategy
         playAlarmSound();
-        triggerPushNotification(data.symbol, data.evaluation?.decision || 'Trade Alert', data.evaluation?.order_ticket);
+        const stratName = data.strategy_name || data.strategy_id;
+        const decision = data.evaluation?.decision || 'Trade Signal';
+        triggerPushNotification(data.symbol, `${stratName}: ${decision}`, data.evaluation?.order_ticket);
+        showCrossAlertToast(data);
       }
     } catch (e) {
       console.error(e);
@@ -112,6 +115,69 @@ function connectWebSocket() {
     connText.className = 'text-[10px] text-rose-400 font-bold';
     setTimeout(connectWebSocket, 2000);
   };
+}
+
+// In-App Toast Banner for Background Multi-Strategy Alerts
+function showCrossAlertToast(data) {
+  const existing = document.getElementById('cross-alert-toast');
+  if (existing) existing.remove();
+
+  const stratName = data.strategy_name || data.strategy_id;
+  const decision = data.evaluation?.decision || 'Trade Signal';
+  const isBuy = String(decision).toLowerCase().includes('buy');
+  const price = data.current_price;
+  const ticket = data.evaluation?.order_ticket;
+
+  const toast = document.createElement('div');
+  toast.id = 'cross-alert-toast';
+  toast.className = `fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[92%] max-w-md p-4 rounded-xl border shadow-2xl backdrop-blur-md flex flex-col gap-2 transition-all ${
+    isBuy ? 'bg-emerald-950/95 border-emerald-500/60 text-white' : 'bg-rose-950/95 border-rose-500/60 text-white'
+  }`;
+
+  toast.innerHTML = `
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="text-xl">${isBuy ? '🟢' : '🔴'}</span>
+        <div>
+          <div class="text-xs font-black uppercase tracking-wider ${isBuy ? 'text-emerald-400' : 'text-rose-400'}">
+            ⚡ ${data.symbol} • ${decision}
+          </div>
+          <div class="text-[11px] text-slate-300 font-semibold">${stratName}</div>
+        </div>
+      </div>
+      <button onclick="document.getElementById('cross-alert-toast').remove()" class="text-slate-400 hover:text-white p-1 text-sm font-bold">✕</button>
+    </div>
+    <div class="text-xs text-slate-200 flex justify-between items-center bg-black/40 px-3 py-1.5 rounded-lg font-mono">
+      <span>Price: <b>${price}</b></span>
+      ${ticket ? `<span>SL: <b class="text-rose-400">${ticket['Stop Loss']}</b> | TP: <b class="text-emerald-400">${ticket['Take Profit']}</b></span>` : ''}
+    </div>
+    <div class="flex gap-2 mt-1">
+      <button id="toast-switch-btn" class="flex-1 py-1.5 text-xs font-bold rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white shadow transition-all">
+        Switch to ${data.symbol} (${stratName})
+      </button>
+    </div>
+  `;
+
+  document.body.appendChild(toast);
+
+  const switchBtn = document.getElementById('toast-switch-btn');
+  if (switchBtn) {
+    switchBtn.addEventListener('click', () => {
+      if (data.symbol) switchSymbol(data.symbol);
+      if (data.strategy_id) {
+        const select = document.getElementById('strategy-select');
+        if (select) select.value = data.strategy_id;
+        switchStrategy(data.strategy_id);
+      }
+      toast.remove();
+    });
+  }
+
+  // Auto remove after 12 seconds
+  setTimeout(() => {
+    const el = document.getElementById('cross-alert-toast');
+    if (el) el.remove();
+  }, 12000);
 }
 
 // Render incoming market updates
