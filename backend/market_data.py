@@ -171,3 +171,15 @@ class MarketDataProvider:
             "low": low,
             "updated_at": time.time()
         }
+
+    def get_live_price(self, symbol_key: str = "NAS100") -> float:
+        if "overrides" in self._cache and symbol_key in self._cache["overrides"]:
+            p = self._cache["overrides"][symbol_key].get("price")
+            if p and p > 0:
+                return float(p)
+        tv_sym = "CAPITALCOM:GOLD" if symbol_key == "GOLD" else "CAPITALCOM:US100"
+        tv_quote = tv_feed.get_quote(tv_sym)
+        if tv_quote and tv_quote.get("price", 0) > 0:
+            return float(tv_quote["price"])
+        m = self.get_market_data(symbol_key)
+        return float(m.get("current_price", 0.0))
