@@ -347,57 +347,77 @@ async def websocket_endpoint(websocket: WebSocket):
         if websocket in connected_clients:
             connected_clients.remove(websocket)
 
-# Background scanner loop running every second
+# Background scanner loop running every second (Dual Symbol Continuous Monitoring)
 async def market_scanner_loop():
     global latest_evaluation
-    last_decision = "Wait / No trade"
+    last_decision = {"NAS100": "Wait / No trade", "GOLD": "Wait / No trade"}
+    symbols_to_scan = ["NAS100", "GOLD"]
     
     while True:
         try:
-            symbol = account_config.get("active_symbol", "NAS100")
-            # Fetch market data
-            data = await asyncio.to_thread(market_data_provider.get_market_data, symbol)
-            
-            # Evaluate active strategy
-            eval_result = strategy_mgr.evaluate_active(data, account_config)
-            
-            # Check for alert trigger
-            current_decision = eval_result.get("decision", "Wait / No trade")
-            is_new_alert = (current_decision != "Wait / No trade") and (current_decision != last_decision)
-            last_decision = current_decision
-            
-            if is_new_alert:
-                asyncio.create_task(dispatch_trade_alert(
-                    symbol,
-                    strategy_mgr.get_active_strategy_id(),
-                    eval_result,
-                    data.get("current_price", 0.0)
-                ))
-            
-            payload = {
-                "type": "MARKET_UPDATE",
-                "timestamp": data.get("timestamp"),
-                "symbol": symbol,
-                "current_price": data.get("current_price"),
-                "strategy_id": strategy_mgr.get_active_strategy_id(),
-                "evaluation": eval_result,
-                "is_alert": is_new_alert,
-                "account_config": account_config
-            }
-            
-            latest_evaluation = payload
-            
-            # Broadcast to all connected phone and desktop clients
-            if connected_clients:
-                msg_str = json.dumps(payload)
-                disconnected = set()
-                for client in connected_clients:
-                    try:
-                        await client.send_text(msg_str)
-                    except Exception:
-                        disconnected.add(client)
-                connected_clients.difference_update(disconnected)
+            active_sym = account_config.get("active_symbol", "NAS100")
+            for symbol in symbols_to_scan:
+                # Fetch fresh market data
+                data = await asyncio.to_thread(market_data_provider.get_market_data, symbol)
                 
+                # Evaluate active strategy
+                eval_result = strategy_mgr.evaluate_active(data, account_config)
+                
+                # Check for alert trigger per symbol
+                current_decision = eval_result.get("decision", "Wait / No trade")
+                prev_decision = last_decision.get(symbol, "Wait / No trade")
+                is_new_alert = (current_decision != "Wait / No trade") and (current_decision != prev_decision)
+                last_decision[symbol] = current_decision
+                
+                # Dispatch mobile push, Telegram & WhatsApp alerts for BOTH NAS100 AND GOLD!
+                if is_new_alert:
+                    asyncio.create_task(dispatch_trade_alert(
+                        symbol,
+                        strategy_mgr.get_active_strategy_id(),
+                        eval_result,
+                        data.get("current_price", 0.0)
+                    ))
+                
+                # If this is the active symbol being viewed on screen, broadcast to clients
+                if symbol == active_sym:
+                    payload = {
+                        "type": "MARKET_UPDATE",
+                        "timestamp": data.get("timestamp"),
+                        "symbol": symbol,
+                        "current_price": data.get("current_price"),
+                        "strategy_id": strategy_mgr.get_active_strategy_id(),
+                        "evaluation": eval_result,
+                        "is_alert": is_new_alert,
+                        "account_config": account_config
+                    }
+                    latest_evaluation = payload
+                    if connected_clients:
+                        msg_str = json.dumps(payload)
+                        disconnected = set()
+                        for client in connected_clients:
+                            try:
+                                await client.send_text(msg_str)
+                            except Exception:
+                                disconnected.add(client)
+                        connected_clients.difference_update(disconnected)
+                elif is_new_alert:
+                    # Even if not the screen active symbol, notify connected client about cross-symbol alert (e.g. Gold)
+                    alert_payload = {
+                        "type": "CROSS_ALERT",
+                        "symbol": symbol,
+                        "current_price": data.get("current_price"),
+                        "strategy_id": strategy_mgr.get_active_strategy_id(),
+                        "evaluation": eval_result,
+                        "is_alert": True
+                    }
+                    if connected_clients:
+                        msg_str = json.dumps(alert_payload)
+                        for client in list(connected_clients):
+                            try:
+                                await client.send_text(msg_str)
+                            except Exception:
+                                pass
+                                
         except Exception as e:
             print(f"[Scanner Loop Error] {e}")
             

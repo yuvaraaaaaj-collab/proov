@@ -31,15 +31,14 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                 "order_ticket": None
             }
 
-        # 1. 4H Environment & Dealing Range
-        h4_high = max([c['high'] for c in c_1h[-40:]])
-        h4_low = min([c['low'] for c in c_1h[-40:]])
+        dec = 2 if "gold" in symbol.lower() else 1
+
+        # 1. 4H Environment & Dealing Range (5-Day Rolling HTF Range)
+        h4_lookback = min(len(c_1h), 120)
+        h4_high = max([c['high'] for c in c_1h[-h4_lookback:]])
+        h4_low = min([c['low'] for c in c_1h[-h4_lookback:]])
         h4_range_mid = (h4_high + h4_low) / 2
-        h4_bias = "BUY (Bullish Flow)" if current_price > h4_range_mid else "SELL (Bearish Flow)"
-        if current_price >= h4_high * 0.985:
-            h4_bias = "BULLISH INTO EXTREME PREMIUM / BSL"
-        elif current_price <= h4_low * 1.015:
-            h4_bias = "BEARISH INTO EXTREME DISCOUNT / SSL"
+        h4_bias = "BULLISH FLOW (Trading in Premium)" if current_price > h4_range_mid else "BEARISH FLOW (Trading in Discount)"
 
         # 2. 1H Context & Session Levels
         pdh = max([c['high'] for c in c_1h[-24:-1]]) if len(c_1h) >= 25 else max([c['high'] for c in c_1h])
@@ -72,8 +71,8 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
 
         checklist = {
             "4H Swing Bias": h4_bias,
-            "1H Session Context": f"PDH: {round(pdh, 1)} | PDL: {round(pdl, 1)}",
-            "15M Liquidity": f"BSL: {round(bsl_15m, 1)} | SSL: {round(ssl_15m, 1)}",
+            "1H Session Context": f"Day High: {round(pdh, dec)} | Day Low: {round(pdl, dec)}",
+            "15M Liquidity": f"BSL: {round(bsl_15m, dec)} | SSL: {round(ssl_15m, dec)}",
             "Session Timing": session_label,
             "Liquidity Taken": "YES" if (bsl_swept or ssl_swept) else "NO",
             "1M Control & BOS": "NO",
@@ -103,11 +102,11 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
             if m1_swing_lows and current_price < m1_swing_lows[-1]:
                 checklist["1M Control & BOS"] = "YES (Bearish BOS Confirmed)"
                 protected_high = recent_1m_high
-                checklist["Protected Level"] = f"Protected HIGH: {round(protected_high, 1)}"
+                checklist["Protected Level"] = f"Protected HIGH: {round(protected_high, dec)}"
                 
                 # POI: 1M Bearish FVG / Supply midpoint
                 poi_entry = (protected_high + current_price) / 2
-                checklist["POI Formed"] = f"1M Supply @ {round(poi_entry, 1)}"
+                checklist["POI Formed"] = f"1M Supply @ {round(poi_entry, dec)}"
                 
                 # SL: beyond Protected High with buffer
                 sl_buffer = 4.0 if symbol == "NAS100" else 1.5
@@ -125,14 +124,14 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                     order_ticket = {
                         "Order Type": "SELL LIMIT",
                         "Instrument": symbol,
-                        "Entry Price": round(poi_entry, 1),
-                        "Stop Loss": round(sl, 1),
-                        "Take Profit": round(tp, 1),
+                        "Entry Price": round(poi_entry, dec),
+                        "Stop Loss": round(sl, dec),
+                        "Take Profit": round(tp, dec),
                         "R:R": f"1:{round(rr, 2)}",
                         "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
                         "Projected Profit": f"+${projected_gain:.2f}",
                         "Consistency Impact": f"{round((projected_gain / 100.0) * 100, 1)}% (< 15% Cap Safe)",
-                        "Cancel If": f"Price breaks above Protected High ({round(protected_high, 1)}) or sweeps TP ({round(tp, 1)}) before fill."
+                        "Cancel If": f"Price breaks above Protected High ({round(protected_high, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
                     }
 
         elif ssl_swept and len(c_1m) >= 4:
@@ -147,11 +146,11 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
             if m1_swing_highs and current_price > m1_swing_highs[-1]:
                 checklist["1M Control & BOS"] = "YES (Bullish BOS Confirmed)"
                 protected_low = recent_1m_low
-                checklist["Protected Level"] = f"Protected LOW: {round(protected_low, 1)}"
+                checklist["Protected Level"] = f"Protected LOW: {round(protected_low, dec)}"
                 
                 # POI: 1M Bullish Demand midpoint
                 poi_entry = (protected_low + current_price) / 2
-                checklist["POI Formed"] = f"1M Demand @ {round(poi_entry, 1)}"
+                checklist["POI Formed"] = f"1M Demand @ {round(poi_entry, dec)}"
                 
                 sl_buffer = 4.0 if symbol == "NAS100" else 1.5
                 sl = protected_low - sl_buffer
@@ -168,14 +167,14 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                     order_ticket = {
                         "Order Type": "BUY LIMIT",
                         "Instrument": symbol,
-                        "Entry Price": round(poi_entry, 1),
-                        "Stop Loss": round(sl, 1),
-                        "Take Profit": round(tp, 1),
+                        "Entry Price": round(poi_entry, dec),
+                        "Stop Loss": round(sl, dec),
+                        "Take Profit": round(tp, dec),
                         "R:R": f"1:{round(rr, 2)}",
                         "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
                         "Projected Profit": f"+${projected_gain:.2f}",
                         "Consistency Impact": f"{round((projected_gain / 100.0) * 100, 1)}% (< 15% Cap Safe)",
-                        "Cancel If": f"Price drops below Protected Low ({round(protected_low, 1)}) or sweeps TP ({round(tp, 1)}) before fill."
+                        "Cancel If": f"Price drops below Protected Low ({round(protected_low, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
                     }
 
         return {

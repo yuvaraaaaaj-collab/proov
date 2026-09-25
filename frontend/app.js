@@ -96,6 +96,10 @@ function connectWebSocket() {
       const data = JSON.parse(event.data);
       if (data.type === 'MARKET_UPDATE') {
         renderMarketUpdate(data);
+      } else if (data.type === 'CROSS_ALERT') {
+        // Background alert triggered on another symbol (e.g. Gold alert while viewing NAS100)
+        playAlarmSound();
+        triggerPushNotification(data.symbol, data.evaluation?.decision || 'Trade Alert', data.evaluation?.order_ticket);
       }
     } catch (e) {
       console.error(e);
@@ -137,10 +141,14 @@ function renderMarketUpdate(data) {
     decBadge.textContent = decision;
   }
 
-  // 3. Session & Levels (Universal mapping for SMC, Silver Bullet & Session Breakout)
+  // 3. Session & Levels (Universal mapping for SMC, Praveen, SPEAN, Silver Bullet & Session Breakout)
   const sessionBadge = document.getElementById('session-badge');
   if (sessionBadge) {
-    if (checklist['Silver Bullet Window']) {
+    if (checklist['3. Session Window (IST)']) {
+      sessionBadge.textContent = checklist['3. Session Window (IST)'].split(' - ')[0].trim();
+    } else if (checklist['Q ZONE']) {
+      sessionBadge.textContent = checklist['Q ZONE'].split(' - ')[0].trim();
+    } else if (checklist['Silver Bullet Window']) {
       sessionBadge.textContent = checklist['Silver Bullet Window'].split(' - ')[0].replace('Outside Window', 'Outside Window').trim();
     } else if (checklist['Session Timing']) {
       sessionBadge.textContent = checklist['Session Timing'].split('(')[0].trim();
@@ -154,13 +162,26 @@ function renderMarketUpdate(data) {
   const pdhEl = document.getElementById('val-pdh');
   const pdlEl = document.getElementById('val-pdl');
   if (pdhEl && pdlEl) {
-    if (checklist['1H Session Context']) {
-      if (lblPdh) lblPdh.textContent = '1H PDH';
-      if (lblPdl) lblPdl.textContent = '1H PDL';
+    if (checklist['4. 30M PD Array']) {
+      if (lblPdh) lblPdh.textContent = '30M Array';
+      if (lblPdl) lblPdl.textContent = 'DOL Target';
+      pdhEl.textContent = checklist['4. 30M PD Array'] || '---';
+      pdlEl.textContent = checklist['2. Draw on Liquidity (DOL)']?.replace('Target @', '') || '---';
+    } else if (checklist['15M LIQUIDITY']) {
+      if (lblPdh) lblPdh.textContent = '15M BSL';
+      if (lblPdl) lblPdl.textContent = '15M SSL';
+      const parts = checklist['15M LIQUIDITY'].split('|');
+      if (parts.length >= 2) {
+        pdhEl.textContent = parts[0].replace('BSL:', '').trim();
+        pdlEl.textContent = parts[1].replace('SSL:', '').trim();
+      }
+    } else if (checklist['1H Session Context']) {
+      if (lblPdh) lblPdh.textContent = 'Day High (BSL)';
+      if (lblPdl) lblPdl.textContent = 'Day Low (SSL)';
       const parts = checklist['1H Session Context'].split('|');
       if (parts.length >= 2) {
-        pdhEl.textContent = parts[0].replace('PDH:', '').trim();
-        pdlEl.textContent = parts[1].replace('PDL:', '').trim();
+        pdhEl.textContent = parts[0].replace('Day High:', '').replace('PDH:', '').trim();
+        pdlEl.textContent = parts[1].replace('Day Low:', '').replace('PDL:', '').trim();
       }
     } else if (checklist['Draw on Liquidity (DOL)']) {
       if (lblPdh) lblPdh.textContent = '15M BSL (Buy Pool)';
