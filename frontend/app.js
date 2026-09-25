@@ -552,12 +552,22 @@ async function submitVipPin() {
 // -------------------------------------------------------------
 function triggerPushNotification(symbol, decision, ticket) {
   if (!('Notification' in window)) return;
+  // Strictly prevent empty notifications without valid Stop Loss and Take Profit
+  if (!ticket || !ticket['Stop Loss'] || ticket['Stop Loss'] === '---' || !ticket['Take Profit'] || ticket['Take Profit'] === '---') {
+    console.warn('Skipping push notification: ticket has no valid SL/TP values', ticket);
+    return;
+  }
+
   if (Notification.permission === 'granted') {
+    const isBuy = String(decision).toLowerCase().includes('buy');
     const title = `🚨 TRADERPRO VIP: ${decision.toUpperCase()} on ${symbol}`;
-    const entry = ticket ? (ticket['Entry Price'] || ticket['Entry']) : 'Market';
-    const sl = ticket ? ticket['Stop Loss'] : '---';
-    const tp = ticket ? ticket['Take Profit'] : '---';
-    const body = `Entry: ${entry} | SL: ${sl} | TP: ${tp} | Risk: $2.50`;
+    const entry = ticket['Entry Price'] || ticket['Entry'] || 'Market';
+    const sl = ticket['Stop Loss'];
+    const tp = ticket['Take Profit'];
+    const rr = ticket['R:R'] || '1:2+';
+    const risk = ticket['Risk Amount'] || '$2.50 (Goat Safe)';
+    const gain = ticket['Projected Profit'] || '---';
+    const body = `🎯 Entry: ${entry} | 🛑 SL: ${sl} | 💰 TP: ${tp} (R:R ${rr}) | 🛡️ Risk: ${risk} | 💵 Target: ${gain}`;
     
     if (navigator.serviceWorker && navigator.serviceWorker.controller) {
       navigator.serviceWorker.ready.then(reg => {
@@ -565,7 +575,7 @@ function triggerPushNotification(symbol, decision, ticket) {
           body: body,
           icon: '/manifest.json',
           vibrate: [200, 100, 200, 100, 400],
-          tag: 'trade-entry-alert',
+          tag: `trade-${symbol}-${Date.now()}`,
           renotify: true
         });
       });
@@ -587,12 +597,26 @@ async function requestNotificationAccess() {
       btn.textContent = 'Active ✅';
       btn.className = 'px-2.5 py-1 text-[11px] font-bold rounded-lg bg-emerald-600 text-white';
     }
-    // Test notification immediately
-    triggerPushNotification(currentSymbol, 'TEST ENTRY ALERT (ACTIVE)', {
-      'Entry Price': '30250.0',
-      'Stop Loss': '30230.0',
-      'Take Profit': '30295.0'
-    });
+    // Test notification immediately with accurate symbol values
+    const isGold = currentSymbol === 'GOLD';
+    const sampleTicket = isGold ? {
+      'Order Type': 'BUY LIMIT (TEST)',
+      'Entry Price': '4306.50',
+      'Stop Loss': '4298.00',
+      'Take Profit': '4322.00',
+      'R:R': '1:2.2',
+      'Risk Amount': '$2.50 (Goat Safe)',
+      'Projected Profit': '+$5.50'
+    } : {
+      'Order Type': 'BUY LIMIT (TEST)',
+      'Entry Price': '30650.0',
+      'Stop Loss': '30620.0',
+      'Take Profit': '30720.0',
+      'R:R': '1:2.3',
+      'Risk Amount': '$2.50 (Goat Safe)',
+      'Projected Profit': '+$5.75'
+    };
+    triggerPushNotification(currentSymbol, 'TEST ENTRY ALERT (ACTIVE)', sampleTicket);
   } else {
     if (btn) btn.textContent = 'Blocked ❌';
   }
@@ -677,24 +701,43 @@ async function testNotificationAlert() {
   const statusEl = document.getElementById('alert-settings-status');
   if (statusEl) {
     statusEl.className = 'text-xs text-center font-bold text-cyan-400';
-    statusEl.textContent = 'Sending Test Alert to Phone & Telegram...';
+    statusEl.textContent = `Sending Test Alert for ${currentSymbol} to Phone & Telegram...`;
     statusEl.classList.remove('hidden');
   }
 
+  const isGold = currentSymbol === 'GOLD';
+  const sampleTicket = isGold ? {
+    'Order Type': 'BUY LIMIT (TEST)',
+    'Entry Price': '4306.50',
+    'Stop Loss': '4298.00',
+    'Take Profit': '4322.00',
+    'R:R': '1:2.2',
+    'Risk Amount': '$2.50 (Goat Safe)',
+    'Projected Profit': '+$5.50'
+  } : {
+    'Order Type': 'BUY LIMIT (TEST)',
+    'Entry Price': '30650.0',
+    'Stop Loss': '30620.0',
+    'Take Profit': '30720.0',
+    'R:R': '1:2.3',
+    'Risk Amount': '$2.50 (Goat Safe)',
+    'Projected Profit': '+$5.75'
+  };
+
   // Trigger local alarm and browser push
   playAlarmSound();
-  triggerPushNotification(currentSymbol, 'BUY LIMIT (TEST)', {
-    'Entry Price': '30250.0',
-    'Stop Loss': '30230.0',
-    'Take Profit': '30295.0'
-  });
+  triggerPushNotification(currentSymbol, 'BUY LIMIT (TEST)', sampleTicket);
 
   try {
-    const res = await fetch('/api/alerts/test', { method: 'POST' });
+    const res = await fetch('/api/alerts/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: currentSymbol })
+    });
     const data = await res.json();
     if (statusEl) {
       statusEl.className = 'text-xs text-center font-bold text-emerald-400';
-      statusEl.textContent = 'Test Alert Dispatched! Check your Phone & Telegram.';
+      statusEl.textContent = `Test Alert Dispatched for ${data.symbol || currentSymbol}! Check your Phone & Telegram.`;
       setTimeout(() => statusEl.classList.add('hidden'), 4000);
     }
   } catch (e) {

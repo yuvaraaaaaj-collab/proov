@@ -110,14 +110,35 @@ def update_alert_settings(req: Dict[str, Any]):
 async def trigger_test_alert(req: Dict[str, Any] = None):
     settings = load_alert_settings()
     results = {}
+    
+    sym = "NAS100"
+    if req and "symbol" in req:
+        sym = "GOLD" if "gold" in str(req["symbol"]).lower() else "NAS100"
+    else:
+        sym = account_config.get("active_symbol", "NAS100")
+        
+    is_gold = (sym == "GOLD")
+    live_price = market_data_provider.get_live_price(sym)
+    
+    if is_gold:
+        entry = round(live_price if live_price > 0 else 4306.50, 2)
+        sl = round(entry - 6.50, 2)
+        tp = round(entry + 15.00, 2)
+    else:
+        entry = round(live_price if live_price > 0 else 30650.0, 1)
+        sl = round(entry - 25.0, 1)
+        tp = round(entry + 60.0, 1)
+
     test_eval = {
+        "strategy": "TraderPro VIP System",
         "decision": "Buy limit",
-        "reason": "Test Signal: 15M SSL Swept -> 1M Bullish MSS + FVG entry setup.",
+        "reason": f"Test VIP Alert: Verified real-time notification delivery pipeline for {sym}.",
         "order_ticket": {
             "Order Type": "BUY LIMIT (TEST)",
-            "Entry Price": 30250.0,
-            "Stop Loss": 30230.0,
-            "Take Profit": 30295.0,
+            "Instrument": sym,
+            "Entry Price": entry,
+            "Stop Loss": sl,
+            "Take Profit": tp,
             "R:R": "1:2.3",
             "Risk Amount": "$2.50 (Goat Safe)",
             "Projected Profit": "+$5.75"
@@ -126,7 +147,7 @@ async def trigger_test_alert(req: Dict[str, Any] = None):
     
     # 1. Test Telegram
     if settings.get("telegram_bot_token") and settings.get("telegram_chat_ids"):
-        msg = format_telegram_message("NAS100", "SMC Master (TEST)", test_eval, 30250.0)
+        msg = format_telegram_message(sym, f"TraderPro VIP ({sym} Test)", test_eval, entry)
         tg_res = await asyncio.to_thread(send_telegram, settings["telegram_bot_token"], settings["telegram_chat_ids"], msg)
         results["telegram"] = tg_res
     else:
@@ -134,13 +155,13 @@ async def trigger_test_alert(req: Dict[str, Any] = None):
         
     # 2. Test WhatsApp
     if settings.get("whatsapp_apikey") and settings.get("whatsapp_phones"):
-        wa_msg = format_plain_message("NAS100", "SMC Master (TEST)", test_eval, 30250.0)
+        wa_msg = format_plain_message(sym, f"TraderPro VIP ({sym} Test)", test_eval, entry)
         wa_res = await asyncio.to_thread(send_whatsapp_callmebot, settings["whatsapp_phones"], settings["whatsapp_apikey"], wa_msg)
         results["whatsapp"] = wa_res
     else:
         results["whatsapp"] = "WhatsApp not configured or disabled"
         
-    return {"status": "dispatched", "results": results}
+    return {"status": "dispatched", "symbol": sym, "results": results}
 
 @app.get("/api/status")
 async def get_status():
@@ -370,9 +391,24 @@ async def market_scanner_loop():
                 # Check for alert triggers across all strategies
                 for strat_id, eval_result in all_evals.items():
                     current_decision = eval_result.get("decision", "Wait / No trade")
+                    ticket = eval_result.get("order_ticket")
                     key = (symbol, strat_id)
                     prev_decision = last_decision.get(key, "Wait / No trade")
-                    is_new_alert = (current_decision not in ["Wait / No trade", None]) and (current_decision != prev_decision)
+                    
+                    # A TRUE actionable entry alert REQUIRES a non-empty order ticket with Entry, SL, and TP!
+                    has_valid_ticket = (
+                        isinstance(ticket, dict)
+                        and bool(ticket.get("Entry Price") or ticket.get("Entry"))
+                        and bool(ticket.get("Stop Loss"))
+                        and bool(ticket.get("Take Profit"))
+                        and str(ticket.get("Stop Loss")) != "---"
+                    )
+                    
+                    is_new_alert = (
+                        current_decision not in ["Wait / No trade", None]
+                        and has_valid_ticket
+                        and (current_decision != prev_decision)
+                    )
                     last_decision[key] = current_decision
                     
                     strat_name = eval_result.get("strategy", strat_id)
@@ -409,7 +445,12 @@ async def market_scanner_loop():
                 # If this is the active symbol being viewed on screen, broadcast its active strategy update
                 if symbol == active_sym:
                     active_eval = all_evals.get(active_strat, {})
-                    is_active_alert = active_eval.get("decision") not in ["Wait / No trade", None]
+                    active_ticket = active_eval.get("order_ticket")
+                    is_active_alert = (
+                        active_eval.get("decision") not in ["Wait / No trade", None]
+                        and isinstance(active_ticket, dict)
+                        and bool(active_ticket.get("Entry Price") or active_ticket.get("Entry"))
+                    )
                     active_name = active_eval.get("strategy", active_strat)
                     
                     # Prepare multi-strategy radar summary for UI

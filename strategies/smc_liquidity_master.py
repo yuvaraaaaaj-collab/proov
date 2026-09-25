@@ -90,6 +90,15 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
         min_rr = account_config.get("min_rr", 1.8)
 
         # 6. Evaluation of 1M Structure Post-Sweep
+        if not is_ny_session:
+            return {
+                "strategy": self.name,
+                "decision": "Wait / No trade",
+                "reason": f"Outside Pre-NY / NY prime window [{now_utc.strftime('%H:%M')} UTC]. SMC Master executes during 12:00-20:00 UTC.",
+                "checklist": checklist,
+                "order_ticket": None
+            }
+
         if bsl_swept and len(c_1m) >= 4:
             # Look for 1M Bearish BOS (closing below recent 1M swing low)
             start_i = max(1, len(c_1m) - 15)
@@ -111,16 +120,24 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                 # SL: beyond Protected High with buffer
                 sl_buffer = 4.0 if symbol == "NAS100" else 1.5
                 sl = protected_high + sl_buffer
-                tp = ssl_15m
-                
                 sl_distance = abs(sl - poi_entry)
+
+                # TP: Target opposing SSL, but cap at 1:3.0 R:R to respect Goat $1k scalping consistency
+                ideal_tp = ssl_15m
+                max_tp_dist = sl_distance * 3.0
+                if abs(poi_entry - ideal_tp) > max_tp_dist:
+                    tp = poi_entry - max_tp_dist
+                else:
+                    tp = ideal_tp
+                
                 tp_distance = abs(poi_entry - tp)
                 rr = tp_distance / sl_distance if sl_distance > 0 else 0
                 
                 if rr >= min_rr:
                     decision = "Sell limit"
-                    reason = "15M BSL swept -> 1M Bearish BOS -> Valid POI Retracement with > 1:2 R:R."
+                    reason = f"15M BSL swept -> 1M Bearish BOS -> Valid POI Retracement with 1:{round(rr, 1)} R:R."
                     projected_gain = round(risk_dollars * rr, 2)
+                    consistency_impact = round((projected_gain / 100.0) * 100, 1)
                     order_ticket = {
                         "Order Type": "SELL LIMIT",
                         "Instrument": symbol,
@@ -130,7 +147,7 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                         "R:R": f"1:{round(rr, 2)}",
                         "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
                         "Projected Profit": f"+${projected_gain:.2f}",
-                        "Consistency Impact": f"{round((projected_gain / 100.0) * 100, 1)}% (< 15% Cap Safe)",
+                        "Consistency Impact": f"{consistency_impact}% (< 15% Cap Safe)",
                         "Cancel If": f"Price breaks above Protected High ({round(protected_high, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
                     }
 
@@ -154,16 +171,24 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                 
                 sl_buffer = 4.0 if symbol == "NAS100" else 1.5
                 sl = protected_low - sl_buffer
-                tp = bsl_15m
-                
                 sl_distance = abs(poi_entry - sl)
+
+                # TP: Target opposing BSL, but cap at 1:3.0 R:R to respect Goat $1k scalping consistency
+                ideal_tp = bsl_15m
+                max_tp_dist = sl_distance * 3.0
+                if abs(ideal_tp - poi_entry) > max_tp_dist:
+                    tp = poi_entry + max_tp_dist
+                else:
+                    tp = ideal_tp
+                
                 tp_distance = abs(tp - poi_entry)
                 rr = tp_distance / sl_distance if sl_distance > 0 else 0
                 
                 if rr >= min_rr:
                     decision = "Buy limit"
-                    reason = "15M SSL swept -> 1M Bullish BOS -> Valid POI Retracement with > 1:2 R:R."
+                    reason = f"15M SSL swept -> 1M Bullish BOS -> Valid POI Retracement with 1:{round(rr, 1)} R:R."
                     projected_gain = round(risk_dollars * rr, 2)
+                    consistency_impact = round((projected_gain / 100.0) * 100, 1)
                     order_ticket = {
                         "Order Type": "BUY LIMIT",
                         "Instrument": symbol,
@@ -173,7 +198,7 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                         "R:R": f"1:{round(rr, 2)}",
                         "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
                         "Projected Profit": f"+${projected_gain:.2f}",
-                        "Consistency Impact": f"{round((projected_gain / 100.0) * 100, 1)}% (< 15% Cap Safe)",
+                        "Consistency Impact": f"{consistency_impact}% (< 15% Cap Safe)",
                         "Cancel If": f"Price drops below Protected Low ({round(protected_low, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
                     }
 

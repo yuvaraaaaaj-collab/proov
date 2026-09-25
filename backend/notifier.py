@@ -137,6 +137,12 @@ def send_whatsapp_callmebot(phones: List[str], apikey: str, text: str) -> Dict[s
     return results
 
 async def dispatch_trade_alert(symbol: str, strategy_name: str, eval_data: Dict[str, Any], current_price: float):
+    # Enforce non-empty order ticket before dispatching any VIP alert
+    ticket = eval_data.get("order_ticket")
+    if not isinstance(ticket, dict) or not ticket.get("Stop Loss") or str(ticket.get("Stop Loss")) == "---":
+        logger.warning(f"Skipping notification dispatch for {symbol} - {strategy_name}: order ticket is missing or has no values.")
+        return
+
     settings = load_alert_settings()
     
     # 1. Telegram Dispatch

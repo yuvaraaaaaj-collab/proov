@@ -127,14 +127,19 @@ class ICTSilverBulletStrategy(BaseStrategy):
         bsl_swept = recent_high >= bsl_15m
         ssl_swept = recent_low <= ssl_15m
 
+        # Point, pip, and decimal specifications
+        is_gold = ("gold" in symbol.lower())
+        dec = 2 if is_gold else 1
+        min_framework = 1.5 if is_gold else 12.0  # 15 pips gold, 12 index points nasdaq
+
         checklist = {
             "Silver Bullet Window": window_info["label"],
-            "Draw on Liquidity (DOL)": f"BSL: {round(bsl_15m, 1)} | SSL: {round(ssl_15m, 1)}",
+            "Draw on Liquidity (DOL)": f"BSL: {round(bsl_15m, dec)} | SSL: {round(ssl_15m, dec)}",
             "Liquidity Raid / Sweep": "YES (BSL Swept)" if bsl_swept else ("YES (SSL Swept)" if ssl_swept else "Awaiting Sweep"),
             "MSS & Displacement": "NO",
             "Fresh FVG Range": "NONE",
             "Entry Convention": "FVG Retracement Limit Order",
-            "Opposing Target Pool": f"{round(ssl_15m, 1)} (SSL)" if bsl_swept else f"{round(bsl_15m, 1)} (BSL)",
+            "Opposing Target Pool": f"{round(ssl_15m, dec)} (SSL)" if bsl_swept else f"{round(bsl_15m, dec)} (BSL)",
             "Goat $1k Compliance": "SAFE ($2.50 Risk | 1:2+ R:R | <15% Cap)"
         }
 
@@ -212,11 +217,11 @@ class ICTSilverBulletStrategy(BaseStrategy):
                                 break
 
                     if fvg:
-                        checklist["Fresh FVG Range"] = f"Bearish FVG: [{round(fvg['bottom'], 1)} - {round(fvg['top'], 1)}]"
-                        entry_price = round(fvg["bottom"], 1)  # Enter on touch of lower boundary
+                        checklist["Fresh FVG Range"] = f"Bearish FVG: [{round(fvg['bottom'], dec)} - {round(fvg['top'], dec)}]"
+                        entry_price = round(fvg["bottom"], dec)  # Enter on touch of lower boundary
                         swept_high = recent_high
-                        stop_loss = round(swept_high + (1.0 if is_gold else 4.0), 1)
-                        take_profit = round(ssl_15m, 1)
+                        stop_loss = round(swept_high + (1.0 if is_gold else 4.0), dec)
+                        take_profit = round(ssl_15m, dec)
 
                         risk_dist = abs(stop_loss - entry_price)
                         reward_dist = abs(entry_price - take_profit)
@@ -226,7 +231,7 @@ class ICTSilverBulletStrategy(BaseStrategy):
                             rr_ratio = reward_dist / risk_dist
                             if rr_ratio >= min_rr:
                                 decision = "Sell limit"
-                                reason = f"ICT Silver Bullet SELL LIMIT formed in {window_info['window_id']}. BSL raided, Bearish MSS displacement created fresh FVG [{round(fvg['bottom'], 1)}-{round(fvg['top'], 1)}]."
+                                reason = f"ICT Silver Bullet SELL LIMIT formed in {window_info['window_id']}. BSL raided, Bearish MSS displacement created fresh FVG [{round(fvg['bottom'], dec)}-{round(fvg['top'], dec)}]."
                                 
                                 # Goat $1k lot sizing
                                 lot_size = round(risk_dollars / (risk_dist * (100 if is_gold else 1)), 2)
@@ -244,9 +249,9 @@ class ICTSilverBulletStrategy(BaseStrategy):
                                     "R:R": f"1:{rr_ratio:.1f}",
                                     "Lot Size": f"{lot_size} Lots",
                                     "Window": window_info["label"].split(" - ")[0].strip(),
-                                    "FVG Range": f"{round(fvg['bottom'], 1)} - {round(fvg['top'], 1)}",
+                                    "FVG Range": f"{round(fvg['bottom'], dec)} - {round(fvg['top'], dec)}",
                                     "Consistency Impact": f"Safe (< 15% Cap / ${account_config.get('balance', 1000)*0.15:.0f})",
-                                    "Cancel If": f"Price trades through {round(stop_loss, 1)} before entry or window closes."
+                                    "Cancel If": f"Price trades through {round(stop_loss, dec)} before entry or window closes."
                                 }
 
         # 5. Bullish Silver Bullet Setup (SSL Swept -> Bullish Displacement -> Bullish FVG)
@@ -292,11 +297,11 @@ class ICTSilverBulletStrategy(BaseStrategy):
                                 break
 
                     if fvg:
-                        checklist["Fresh FVG Range"] = f"Bullish FVG: [{round(fvg['bottom'], 1)} - {round(fvg['top'], 1)}]"
-                        entry_price = round(fvg["top"], 1)  # Enter on touch of upper boundary
+                        checklist["Fresh FVG Range"] = f"Bullish FVG: [{round(fvg['bottom'], dec)} - {round(fvg['top'], dec)}]"
+                        entry_price = round(fvg["top"], dec)  # Enter on touch of upper boundary
                         swept_low = recent_low
-                        stop_loss = round(swept_low - (1.0 if is_gold else 4.0), 1)
-                        take_profit = round(bsl_15m, 1)
+                        stop_loss = round(swept_low - (1.0 if is_gold else 4.0), dec)
+                        take_profit = round(bsl_15m, dec)
 
                         risk_dist = abs(entry_price - stop_loss)
                         reward_dist = abs(take_profit - entry_price)
@@ -305,7 +310,7 @@ class ICTSilverBulletStrategy(BaseStrategy):
                             rr_ratio = reward_dist / risk_dist
                             if rr_ratio >= min_rr:
                                 decision = "Buy limit"
-                                reason = f"ICT Silver Bullet BUY LIMIT formed in {window_info['window_id']}. SSL raided, Bullish MSS displacement created fresh FVG [{round(fvg['bottom'], 1)}-{round(fvg['top'], 1)}]."
+                                reason = f"ICT Silver Bullet BUY LIMIT formed in {window_info['window_id']}. SSL raided, Bullish MSS displacement created fresh FVG [{round(fvg['bottom'], dec)}-{round(fvg['top'], dec)}]."
                                 
                                 lot_size = round(risk_dollars / (risk_dist * (100 if is_gold else 1)), 2)
                                 lot_size = max(0.01, min(lot_size, 0.50))
@@ -322,9 +327,9 @@ class ICTSilverBulletStrategy(BaseStrategy):
                                     "R:R": f"1:{rr_ratio:.1f}",
                                     "Lot Size": f"{lot_size} Lots",
                                     "Window": window_info["label"].split(" - ")[0].strip(),
-                                    "FVG Range": f"{round(fvg['bottom'], 1)} - {round(fvg['top'], 1)}",
+                                    "FVG Range": f"{round(fvg['bottom'], dec)} - {round(fvg['top'], dec)}",
                                     "Consistency Impact": f"Safe (< 15% Cap / ${account_config.get('balance', 1000)*0.15:.0f})",
-                                    "Cancel If": f"Price trades through {round(stop_loss, 1)} before entry or window closes."
+                                    "Cancel If": f"Price trades through {round(stop_loss, dec)} before entry or window closes."
                                 }
 
         return {
