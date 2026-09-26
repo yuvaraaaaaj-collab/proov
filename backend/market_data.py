@@ -150,6 +150,9 @@ class MarketDataProvider:
                 c_1m[-1]['high'] = max(c_1m[-1]['high'], current_price)
                 c_1m[-1]['low'] = min(c_1m[-1]['low'], current_price)
         
+        correlated_sym = "GOLD" if symbol_key == "NAS100" else "NAS100"
+        corr_candles = tv_feed.get_candles(correlated_sym)
+
         return {
             "symbol_name": symbol_key,
             "ticker": ticker,
@@ -160,6 +163,8 @@ class MarketDataProvider:
             "candles_15m": htf.get("c_15m", []),
             "candles_30m": htf.get("c_30m", []),
             "candles_1h": htf.get("c_1h", []),
+            "correlated_symbol": correlated_sym,
+            "correlated_candles_1m": corr_candles or [],
             "timestamp": now
         }
 

@@ -210,7 +210,9 @@ function renderMarketUpdate(data) {
   // 3. Session & Levels (Universal mapping for SMC, Praveen, SPEAN, Silver Bullet & Session Breakout)
   const sessionBadge = document.getElementById('session-badge');
   if (sessionBadge) {
-    if (checklist['3. Session Window (IST)']) {
+    if (checklist['3. Session & Killzone']) {
+      sessionBadge.textContent = checklist['3. Session & Killzone'].split(' (')[0].trim();
+    } else if (checklist['3. Session Window (IST)']) {
       sessionBadge.textContent = checklist['3. Session Window (IST)'].split(' - ')[0].trim();
     } else if (checklist['Q ZONE']) {
       sessionBadge.textContent = checklist['Q ZONE'].split(' - ')[0].trim();
@@ -228,7 +230,12 @@ function renderMarketUpdate(data) {
   const pdhEl = document.getElementById('val-pdh');
   const pdlEl = document.getElementById('val-pdl');
   if (pdhEl && pdlEl) {
-    if (checklist['4. 30M PD Array']) {
+    if (checklist['6. HTF PD Array']) {
+      if (lblPdh) lblPdh.textContent = 'HTF PD Array';
+      if (lblPdl) lblPdl.textContent = 'AMD Phase';
+      pdhEl.textContent = checklist['6. HTF PD Array'] || '---';
+      pdlEl.textContent = checklist['4. AMD Phase'] || '---';
+    } else if (checklist['4. 30M PD Array']) {
       if (lblPdh) lblPdh.textContent = '30M Array';
       if (lblPdl) lblPdl.textContent = 'DOL Target';
       pdhEl.textContent = checklist['4. 30M PD Array'] || '---';

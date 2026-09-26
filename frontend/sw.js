@@ -1,4 +1,4 @@
-const CACHE_NAME = 'trader-pro-v3.11';
+const CACHE_NAME = 'trader-pro-v3.12';
 const ASSETS = [
   '/',
   '/index.html',

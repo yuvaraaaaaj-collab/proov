@@ -5,6 +5,7 @@ from .session_breakout import SessionBreakoutStrategy
 from .silver_bullet import ICTSilverBulletStrategy
 from .praveen_strategy import PraveenStrategy
 from .spean_strategy import SPEANStrategy
+from .ict_market_maker import ICTMarketMakerStrategy
 
 class StrategyManager:
     """
@@ -17,6 +18,7 @@ class StrategyManager:
         
         # Register default built-in strategies
         self.register_strategy("smc_master", SMCLiquidityMasterStrategy())
+        self.register_strategy("ict_market_maker", ICTMarketMakerStrategy())
         self.register_strategy("praveen_strategy", PraveenStrategy())
         self.register_strategy("spean_strategy", SPEANStrategy())
         self.register_strategy("silver_bullet", ICTSilverBulletStrategy())
