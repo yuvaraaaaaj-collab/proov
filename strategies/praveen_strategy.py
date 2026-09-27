@@ -1,95 +1,142 @@
 import datetime
-from typing import Dict, Any, Optional
+import math
+from typing import Dict, Any, Optional, List
 from .base_strategy import BaseStrategy
 
 try:
     import zoneinfo
     IST_TZ = zoneinfo.ZoneInfo("Asia/Kolkata")
+    EST_TZ = zoneinfo.ZoneInfo("America/New_York")
 except Exception:
     import pytz
     IST_TZ = pytz.timezone("Asia/Kolkata")
+    EST_TZ = pytz.timezone("America/New_York")
+
 
 class PraveenStrategy(BaseStrategy):
     """
-    Praveen Strategy: Master Rule Set & Execution Playbook.
-    Core principle: Higher-timeframe location first. Lower-timeframe confirmation second.
+    Praveen's ICT Strategy v2.1 — Developer Implementation Guide — TraderPro App Integration.
+    Markets: NAS100 / NQ (Primary) + MES / SPX500 / GOLD (SMT Confirmation).
+    Style: ICT Scalping (1M Entry, 30M Zone, 1:2 R:R Minimum).
+    Max Trades: 3/day (1 per session).
     
-    Master Flow:
-    W/D/4H/1H liquidity -> Bias -> DOL if clear / Bias if no DOL -> 30M FVG/OB -> 
-    PD Array Tap -> 30M TAP ALERT -> 1M Recent Swing -> 1M IFVG + CISD -> Entry -> SL -> TP
-    
-    Session Checking Windows (IST):
-    - Asia: 05:30 - 08:30 IST
-    - London: 12:30 - 15:30 IST
-    - New York: 19:00 - 22:00 IST
+    The 5-Step Entry Flow (Auto-Detection Logic):
+      1. BIAS — Higher Timeframe Direction (W -> D -> 4H -> 1H) + Midnight Open
+      2. DOL — Draw on Liquidity (BSL / SSL / EQH / EQL / PDH / PDL / PWH / PWL)
+      3. IRL — Find the Entry Zone (30min primary, 15min secondary FVG / OB)
+      4. ENTRY — 1min CISD + IFVG Confirmation:
+         - 4A. LRLR Check (Low Resistance Liquidity Run vs HRLR blockers)
+         - 4B. CISD (Change in State of Delivery on 1min)
+         - 4C. IFVG (Inversion Fair Value Gap on 1min)
+      5. SL & TP Placement (C.E. 50% entry, Stop at CISD swing, 1:2+ R:R)
+      + SMT & SSMT (Quarterly Theory 90-min cycles: Q1, Q2, Q3, Q4)
+      + Setup Grade: A+ (Execute Now), A (Execute), B (Proceed with caution), C (Do Not Trade)
     """
+
     def __init__(self):
         super().__init__(
-            name="Praveen Strategy (30M PD Array + 1M IFVG/CISD)",
-            description="30M PD Array location with 1M IFVG and CISD execution confirmation per Master Rule Set."
+            name="Praveen's ICT Strategy v2.1",
+            description="ICT Scalping on 1M (CISD + IFVG) using 30M PD Arrays (FVG/OB), LRLR path check, SMT/SSMT, and 1:2+ R:R target."
         )
 
-    def _get_ist_session(self) -> Dict[str, Any]:
-        """Calculates current Indian Standard Time (IST) and checks session windows."""
+    def _get_session_and_killzones(self) -> Dict[str, Any]:
+        """
+        Kill Zones & Session Windows (All Times IST / EST per Page 1):
+          - Asian KZ: 5:30 AM – 9:30 AM IST (8:00 PM – 12:00 AM EST) -> Accumulation
+          - London KZ: 11:30 AM – 2:30 PM IST (2:00 AM – 5:00 AM EST) -> Manipulation (Judas Swing)
+          - NY KZ: 4:30 PM – 7:30 PM IST (7:00 AM – 10:00 AM EST) -> Distribution/Expansion
+          - NY Silver Bullet: 7:30 PM – 8:30 PM IST (10:00 AM – 11:00 AM EST) -> Precision Scalp
+          - NY Macro Window: 7:20 PM – 7:40 PM IST (9:50 AM – 10:10 AM EST) -> Algorithmic Injection
+        """
         now_ist = datetime.datetime.now(IST_TZ)
-        hour = now_ist.hour
-        minute = now_ist.minute
-        time_str = now_ist.strftime("%H:%M IST")
-        total_minutes = hour * 60 + minute
+        now_est = datetime.datetime.now(EST_TZ)
+        hour_ist = now_ist.hour
+        min_ist = now_ist.minute
+        total_min_ist = hour_ist * 60 + min_ist
+        time_ist_str = now_ist.strftime("%H:%M IST")
+        time_est_str = now_est.strftime("%I:%M %p EST")
 
-        # Asia: 05:30 - 08:30 IST (330 to 510 minutes)
-        is_asia = (330 <= total_minutes <= 510)
-        # London: 12:30 - 15:30 IST (750 to 930 minutes)
-        is_london = (750 <= total_minutes <= 930)
-        # New York: 19:00 - 22:00 IST (1140 to 1320 minutes)
-        is_ny = (1140 <= total_minutes <= 1320)
+        is_asian = (330 <= total_min_ist <= 570)
+        is_london = (690 <= total_min_ist <= 870)
+        is_ny = (990 <= total_min_ist <= 1170)
+        is_silver_bullet = (1170 <= total_min_ist <= 1230)
+        is_macro = (1160 <= total_min_ist <= 1180)
 
-        is_active = is_asia or is_london or is_ny
+        is_active = is_asian or is_london or is_ny or is_silver_bullet or is_macro
 
-        if is_asia:
-            label = f"Asia Session (05:30–08:30 IST) - [{time_str}] ACTIVE"
-            session_name = "Asia"
-        elif is_london:
-            label = f"London Session (12:30–15:30 IST) - [{time_str}] ACTIVE"
-            session_name = "London"
+        # SSMT Quarterly Theory 90-min cycles (Page 5)
+        # Q1: 7:00 - 8:30 PM IST (9:30 - 11:00 AM EST) -> 1140 to 1230 min
+        # Q2: 8:30 - 10:00 PM IST (11:00 - 12:30 PM EST) -> 1230 to 1320 min
+        # Q3: 10:00 - 11:30 PM IST (12:30 - 2:00 PM EST) -> 1320 to 1410 min
+        # Q4: 11:30 PM - 1:00 AM IST (2:00 - 3:30 PM EST) -> 1410 to 1440 or 0 to 60 min
+        quarter = "None"
+        is_quarter_boundary = False
+        if 1140 <= total_min_ist < 1230:
+            quarter = "Q1 (9:30–11:00 AM EST)"
+            is_quarter_boundary = (abs(total_min_ist - 1140) <= 5 or abs(total_min_ist - 1230) <= 5)
+        elif 1230 <= total_min_ist < 1320:
+            quarter = "Q2 (11:00 AM–12:30 PM EST)"
+            is_quarter_boundary = (abs(total_min_ist - 1230) <= 5 or abs(total_min_ist - 1320) <= 5)
+        elif 1320 <= total_min_ist < 1410:
+            quarter = "Q3 (12:30–2:00 PM EST)"
+            is_quarter_boundary = (abs(total_min_ist - 1320) <= 5 or abs(total_min_ist - 1410) <= 5)
+        elif total_min_ist >= 1410 or total_min_ist <= 60:
+            quarter = "Q4 (2:00–3:30 PM EST)"
+            is_quarter_boundary = (abs(total_min_ist - 1410) <= 5 or abs(total_min_ist - 60) <= 5)
+
+        if is_macro:
+            kz_name = "NY Macro Window (7:20–7:40 PM IST)"
+            phase = "Algorithmic Injection"
+        elif is_silver_bullet:
+            kz_name = "NY Silver Bullet (7:30–8:30 PM IST)"
+            phase = "Precision Scalp Window"
         elif is_ny:
-            label = f"New York Session (19:00–22:00 IST) - [{time_str}] ACTIVE"
-            session_name = "New York"
+            kz_name = "NY Kill Zone (4:30–7:30 PM IST)"
+            phase = "Distribution/Expansion"
+        elif is_london:
+            kz_name = "London Kill Zone (11:30 AM–2:30 PM IST)"
+            phase = "Manipulation (Judas Swing)"
+        elif is_asian:
+            kz_name = "Asian Kill Zone (5:30–9:30 AM IST)"
+            phase = "Accumulation"
         else:
-            if total_minutes < 330:
-                next_s = "Asia Session (05:30 IST)"
-            elif total_minutes < 750:
-                next_s = "London Session (12:30 IST)"
-            elif total_minutes < 1140:
-                next_s = "New York Session (19:00 IST)"
-            else:
-                next_s = "Tomorrow Asia Session (05:30 IST)"
-            label = f"Outside Session Window [{time_str}] (Next: {next_s})"
-            session_name = "Outside"
+            kz_name = f"Outside Kill Zones [{time_ist_str}]"
+            phase = "Inter-session Consolidation"
 
         return {
             "is_active": is_active,
-            "session_name": session_name,
-            "label": label,
-            "time_str": time_str
+            "is_silver_bullet": is_silver_bullet,
+            "is_macro": is_macro,
+            "quarter": quarter,
+            "is_quarter_boundary": is_quarter_boundary,
+            "name": kz_name,
+            "phase": phase,
+            "time_ist": time_ist_str,
+            "time_est": time_est_str
         }
 
-    def _determine_htf_bias(self, c_1h: list, current_price: float) -> Dict[str, Any]:
+    def _determine_htf_bias(self, c_1h: list, current_price: float, midnight_open: Optional[float]) -> Dict[str, Any]:
         """
-        Step 1: Higher-Timeframe Analysis (Weekly/Daily/4H/1H).
-        Determines overall market bias, 24h dealing range, and swing structure.
+        Step 1: BIAS — Higher Timeframe Direction (Page 2).
+        Pseudo-code:
+          if (D_swing_high > prev_D_swing_high && D_swing_low > prev_D_swing_low) bias = "BULLISH"
+          else if (D_swing_high < prev_D_swing_high && D_swing_low < prev_D_swing_low) bias = "BEARISH"
+          else bias = "NO_TRADE"
+        Validated by Midnight Open (00:00 EST / 9:30 AM IST):
+          Bullish = price attempting to reclaim/hold above midnight open
+          Bearish = price failing to hold/below midnight open
         """
-        if not c_1h:
-            return {
-                "is_bullish": True,
-                "bias_label": "BULLISH (Premium Expansion Expected)",
-                "high_24h": current_price,
-                "low_24h": current_price
-            }
+        if len(c_1h) < 12:
+            return {"bias": "NO_TRADE", "is_bullish": False, "is_bearish": False, "label": "NO_TRADE (Insufficient HTF data)"}
 
-        recent_1h = c_1h[-24:] if len(c_1h) >= 24 else c_1h
-        high_24h = max([c['high'] for c in recent_1h])
-        low_24h = min([c['low'] for c in recent_1h])
+        # Look at 24h - 48h swing highs and lows on 1H (emulating Daily/4H structure)
+        recent_1h = c_1h[-48:] if len(c_1h) >= 48 else c_1h
+        swing_highs = [recent_1h[i]['high'] for i in range(1, len(recent_1h) - 1) if recent_1h[i]['high'] >= recent_1h[i-1]['high'] and recent_1h[i]['high'] >= recent_1h[i+1]['high']]
+        swing_lows = [recent_1h[i]['low'] for i in range(1, len(recent_1h) - 1) if recent_1h[i]['low'] <= recent_1h[i-1]['low'] and recent_1h[i]['low'] <= recent_1h[i+1]['low']]
+
+        # 24h extreme high and low
+        high_24h = max([c['high'] for c in recent_1h[-24:]])
+        low_24h = min([c['low'] for c in recent_1h[-24:]])
         range_mid = (high_24h + low_24h) / 2
 
         # 20-period 1H trend
@@ -99,190 +146,465 @@ class PraveenStrategy(BaseStrategy):
         for c in c_1h[-ema_len:]:
             ema_1h = alpha * c['close'] + (1 - alpha) * ema_1h
 
-        # 1H swing highs and swing lows to detect structural flow
-        swing_highs = [recent_1h[i]['high'] for i in range(1, len(recent_1h)-1) if recent_1h[i]['high'] >= recent_1h[i-1]['high'] and recent_1h[i]['high'] >= recent_1h[i+1]['high']]
-        swing_lows = [recent_1h[i]['low'] for i in range(1, len(recent_1h)-1) if recent_1h[i]['low'] <= recent_1h[i-1]['low'] and recent_1h[i]['low'] <= recent_1h[i+1]['low']]
+        is_bullish = False
+        is_bearish = False
 
-        # Bullish if making higher swing lows or trading above 1H EMA with expansion toward high_24h
-        if len(swing_lows) >= 2 and swing_lows[-1] > swing_lows[-2]:
-            is_bullish = True
-        elif len(swing_highs) >= 2 and swing_highs[-1] < swing_highs[-2]:
-            is_bullish = False
+        if len(swing_highs) >= 2 and len(swing_lows) >= 2:
+            if swing_highs[-1] > swing_highs[-2] and swing_lows[-1] > swing_lows[-2]:
+                is_bullish = True
+            elif swing_highs[-1] < swing_highs[-2] and swing_lows[-1] < swing_lows[-2]:
+                is_bearish = True
+
+        if not is_bullish and not is_bearish:
+            # Fallback to 1H EMA + 24h Range Midpoint
+            if current_price >= range_mid and current_price >= ema_1h:
+                is_bullish = True
+            elif current_price < range_mid and current_price < ema_1h:
+                is_bearish = True
+
+        # Midnight open validation (Page 2)
+        if midnight_open and midnight_open > 0:
+            if is_bullish and current_price < midnight_open * 0.985:
+                is_bullish = False  # Failed to reclaim midnight open
+            elif is_bearish and current_price > midnight_open * 1.015:
+                is_bearish = False  # Broke too far above midnight open
+
+        if is_bullish:
+            bias_str = "BULLISH"
+            label = "BULLISH (HH/HL D/4H Structure & Reclaiming Midnight Open)"
+        elif is_bearish:
+            bias_str = "BEARISH"
+            label = "BEARISH (LH/LL D/4H Structure & Failing to Hold Midnight Open)"
         else:
-            is_bullish = current_price >= range_mid or current_price >= ema_1h
+            bias_str = "NO_TRADE"
+            label = "NO_TRADE (Unclear D/4H Structure - Standing Aside)"
 
-        bias_label = "BULLISH (Premium Expansion Expected)" if is_bullish else "BEARISH (Discount Expansion Expected)"
         return {
+            "bias": bias_str,
             "is_bullish": is_bullish,
-            "bias_label": bias_label,
+            "is_bearish": is_bearish,
+            "label": label,
             "high_24h": high_24h,
             "low_24h": low_24h,
             "range_mid": range_mid,
-            "ema_1h": ema_1h
+            "swing_highs": swing_highs,
+            "swing_lows": swing_lows
         }
 
-    def _determine_dol(self, is_bullish: bool, current_price: float, high_24h: float, low_24h: float, dec: int) -> Dict[str, Any]:
+    def _determine_dol(self, is_bullish: bool, is_bearish: bool, current_price: float, c_1h: list, dec: int) -> Dict[str, Any]:
         """
-        Step 2: DOL Determination.
-        If Bullish: Target overhead Buy-Side Liquidity (BSL) / Day High.
-        If Bearish: Target lower Sell-Side Liquidity (SSL) / Day Low.
+        Step 2: DOL — Draw on Liquidity (Target Identification) (Page 2).
+        Bullish DOL = nearest un-swept BSL / EQH / PDH / PWH above price.
+        Bearish DOL = nearest un-swept SSL / EQL / PDL / PWL below price.
         """
-        if is_bullish:
-            if high_24h > current_price:
-                dol = high_24h
-                label = f"BSL Target @ {round(dol, dec)}"
-            else:
-                dol = current_price + max(20.0, (high_24h - low_24h) * 0.25)
-                label = f"BSL Expansion @ {round(dol, dec)}"
-        else:
-            if low_24h < current_price:
-                dol = low_24h
-                label = f"SSL Target @ {round(dol, dec)}"
-            else:
-                dol = current_price - max(20.0, (high_24h - low_24h) * 0.25)
-                label = f"SSL Expansion @ {round(dol, dec)}"
-        return {"dol": round(dol, dec), "label": label}
+        if not c_1h:
+            return {"dol": None, "type": "NONE", "label": "No DOL Identified"}
 
-    def _find_30m_pd_array(self, c_30m: list, is_bullish: bool, current_price: float, dec: int) -> Dict[str, Any]:
-        """
-        Step 4: Select 30M PD Array (FVG or OB).
-        - For Bullish setup: Find DISCOUNT arrays (at or below current price / swing high).
-        - For Bearish setup: Find PREMIUM arrays (at or above current price / swing low).
-        - Array must NOT be invalidated by subsequent closes through it.
-        """
-        if len(c_30m) < 4:
-            return {
-                "type": "NONE",
-                "high": round(current_price, dec),
-                "low": round(current_price, dec),
-                "label": "Insufficient 30M data"
-            }
+        recent = c_1h[-48:] if len(c_1h) >= 48 else c_1h
+        highs = [c['high'] for c in recent]
+        lows = [c['low'] for c in recent]
 
-        candidates = []
+        pdh = max(highs[-24:]) if len(highs) >= 24 else max(highs)
+        pdl = min(lows[-24:]) if len(lows) >= 24 else min(lows)
+        pwh = max(highs)
+        pwl = min(lows)
+
+        # Equal Highs / Lows detection (double/triple tops/bottoms)
+        eqh = None
+        eql = None
+        for i in range(len(highs) - 2):
+            for j in range(i + 1, len(highs)):
+                if abs(highs[i] - highs[j]) / highs[i] < 0.0008 and highs[i] > current_price:
+                    eqh = max(highs[i], highs[j])
+                    break
+        for i in range(len(lows) - 2):
+            for j in range(i + 1, len(lows)):
+                if abs(lows[i] - lows[j]) / lows[i] < 0.0008 and lows[i] < current_price:
+                    eql = min(lows[i], lows[j])
+                    break
 
         if is_bullish:
-            # Look for 30M Bullish FVG & Bullish OB in Discount
-            for i in range(len(c_30m) - 1, 1, -1):
-                c1 = c_30m[i-2]
-                c3 = c_30m[i]
-                if c3['low'] > c1['high']:
-                    low_val = round(c1['high'], dec)
-                    high_val = round(c3['low'], dec)
-                    # Check if subsequent candles respected this FVG (no close below low_val)
-                    subsequent = c_30m[i+1:]
-                    violated = any(c['close'] < low_val for c in subsequent)
-                    if not violated and low_val <= current_price:
-                        candidates.append({
-                            "type": "30M Bullish FVG",
-                            "high": high_val,
-                            "low": low_val,
-                            "mid": (high_val + low_val) / 2
-                        })
+            # Bullish candidates above price: EQH, PDH, PWH, 1H swing highs
+            candidates = []
+            if eqh and eqh > current_price:
+                candidates.append((eqh, "EQH (Equal Highs Magnet)"))
+            if pdh > current_price:
+                candidates.append((pdh, "PDH (Previous Day High)"))
+            if pwh > current_price:
+                candidates.append((pwh, "PWH (Previous Week High)"))
+            for h in highs:
+                if h > current_price:
+                    candidates.append((h, "BSL (Buy-Side Liquidity Pool)"))
 
-            for i in range(len(c_30m) - 2, 1, -1):
-                c = c_30m[i]
-                next_c = c_30m[i+1]
-                if c['close'] < c['open'] and next_c['close'] > c['high']:
-                    low_val = round(c['low'], dec)
-                    high_val = round(c['high'], dec)
-                    subsequent = c_30m[i+1:]
-                    violated = any(sc['close'] < low_val for sc in subsequent)
-                    if not violated and low_val <= current_price:
-                        candidates.append({
-                            "type": "30M Bullish OB",
-                            "high": high_val,
-                            "low": low_val,
-                            "mid": (high_val + low_val) / 2
-                        })
-        else:
-            # Look for 30M Bearish FVG & Bearish OB in Premium
-            for i in range(len(c_30m) - 1, 1, -1):
-                c1 = c_30m[i-2]
-                c3 = c_30m[i]
-                if c1['low'] > c3['high']:
-                    low_val = round(c3['high'], dec)
-                    high_val = round(c1['low'], dec)
-                    subsequent = c_30m[i+1:]
-                    violated = any(c['close'] > high_val for c in subsequent)
-                    if not violated and high_val >= current_price:
-                        candidates.append({
-                            "type": "30M Bearish FVG",
-                            "high": high_val,
-                            "low": low_val,
-                            "mid": (high_val + low_val) / 2
-                        })
+            if candidates:
+                best = min(candidates, key=lambda x: abs(x[0] - current_price))
+                return {"dol": round(best[0], dec), "type": best[1], "label": f"{best[1]} @ {round(best[0], dec)}"}
+            else:
+                fallback_dol = current_price + max(25.0, (pdh - pdl) * 0.3)
+                return {"dol": round(fallback_dol, dec), "type": "BSL Expansion", "label": f"BSL Expansion Target @ {round(fallback_dol, dec)}"}
 
-            for i in range(len(c_30m) - 2, 1, -1):
-                c = c_30m[i]
-                next_c = c_30m[i+1]
-                if c['close'] > c['open'] and next_c['close'] < c['low']:
-                    low_val = round(c['low'], dec)
-                    high_val = round(c['high'], dec)
-                    subsequent = c_30m[i+1:]
-                    violated = any(sc['close'] > high_val for sc in subsequent)
-                    if not violated and high_val >= current_price:
-                        candidates.append({
-                            "type": "30M Bearish OB",
-                            "high": high_val,
-                            "low": low_val,
-                            "mid": (high_val + low_val) / 2
-                        })
+        elif is_bearish:
+            # Bearish candidates below price: EQL, PDL, PWL, 1H swing lows
+            candidates = []
+            if eql and eql < current_price:
+                candidates.append((eql, "EQL (Equal Lows Magnet)"))
+            if pdl < current_price:
+                candidates.append((pdl, "PDL (Previous Day Low)"))
+            if pwl < current_price:
+                candidates.append((pwl, "PWL (Previous Week Low)"))
+            for l in lows:
+                if l < current_price:
+                    candidates.append((l, "SSL (Sell-Side Liquidity Pool)"))
 
-        if candidates:
-            # Pick candidate nearest to current price
-            best = min(candidates, key=lambda c: abs(c['mid'] - current_price))
-            return {
-                "type": best["type"],
-                "high": best["high"],
-                "low": best["low"],
-                "mid": best["mid"],
-                "label": f"{best['type']} [{best['low']} - {best['high']}]"
-            }
+            if candidates:
+                best = min(candidates, key=lambda x: abs(current_price - x[0]))
+                return {"dol": round(best[0], dec), "type": best[1], "label": f"{best[1]} @ {round(best[0], dec)}"}
+            else:
+                fallback_dol = current_price - max(25.0, (pdh - pdl) * 0.3)
+                return {"dol": round(fallback_dol, dec), "type": "SSL Expansion", "label": f"SSL Expansion Target @ {round(fallback_dol, dec)}"}
 
-        # Fallback to nearest 30M swing level
-        last_30m = c_30m[-1]
-        fallback_low = round(min(last_30m['low'], current_price), dec) if is_bullish else round(current_price, dec)
-        fallback_high = round(current_price, dec) if is_bullish else round(max(last_30m['high'], current_price), dec)
+        return {"dol": None, "type": "NONE", "label": "No Clear DOL (Unclear Bias)"}
+
+    def _find_30m_pd_arrays(self, c_30m: list, dec: int) -> Dict[str, list]:
+        """
+        Step 3: IRL — Find the Entry Zone (30min / 15min PD Arrays) (Page 3).
+        Finds all active Bullish and Bearish FVGs and Order Blocks (OB).
+        Includes Consequent Encroachment (C.E. = 50% midpoint).
+        """
+        bullish_fvgs = []
+        bearish_fvgs = []
+        bullish_obs = []
+        bearish_obs = []
+
+        if len(c_30m) < 3:
+            return {"bull_fvgs": [], "bear_fvgs": [], "bull_obs": [], "bear_obs": []}
+
+        # 1. 30min FVG Detection: Candle 1 High < Candle 3 Low (Bullish) or Candle 1 Low > Candle 3 High (Bearish)
+        for i in range(1, len(c_30m) - 1):
+            c_prev = c_30m[i-1]
+            c_next = c_30m[i+1]
+            # Bullish FVG
+            if c_prev['high'] < c_next['low']:
+                top = round(c_next['low'], dec)
+                bottom = round(c_prev['high'], dec)
+                ce = round((top + bottom) / 2, dec)
+                bullish_fvgs.append({
+                    "type": "30M Bullish FVG",
+                    "top": top,
+                    "bottom": bottom,
+                    "ce": ce,
+                    "bar_idx": i
+                })
+            # Bearish FVG
+            if c_prev['low'] > c_next['high']:
+                top = round(c_prev['low'], dec)
+                bottom = round(c_next['high'], dec)
+                ce = round((top + bottom) / 2, dec)
+                bearish_fvgs.append({
+                    "type": "30M Bearish FVG",
+                    "top": top,
+                    "bottom": bottom,
+                    "ce": ce,
+                    "bar_idx": i
+                })
+
+        # 2. 30min Order Block Detection: Last bearish candle before bullish displacement with FVG
+        for i in range(1, len(c_30m) - 2):
+            c_cur = c_30m[i]
+            c_disp = c_30m[i+1]
+            if c_cur['close'] < c_cur['open'] and c_disp['close'] > c_cur['high']:
+                top = round(c_cur['high'], dec)
+                bottom = round(c_cur['low'], dec)
+                ce = round((top + bottom) / 2, dec)
+                bullish_obs.append({
+                    "type": "30M Bullish OB",
+                    "top": top,
+                    "bottom": bottom,
+                    "ce": ce,
+                    "bar_idx": i
+                })
+            elif c_cur['close'] > c_cur['open'] and c_disp['close'] < c_cur['low']:
+                top = round(c_cur['high'], dec)
+                bottom = round(c_cur['low'], dec)
+                ce = round((top + bottom) / 2, dec)
+                bearish_obs.append({
+                    "type": "30M Bearish OB",
+                    "top": top,
+                    "bottom": bottom,
+                    "ce": ce,
+                    "bar_idx": i
+                })
+
         return {
-            "type": "30M Swing Discount" if is_bullish else "30M Swing Premium",
-            "high": fallback_high,
-            "low": fallback_low,
-            "mid": (fallback_high + fallback_low) / 2,
-            "label": f"30M Swing Level [{fallback_low} - {fallback_high}]"
+            "bull_fvgs": bullish_fvgs,
+            "bear_fvgs": bearish_fvgs,
+            "bull_obs": bullish_obs,
+            "bear_obs": bearish_obs
         }
+
+    def _check_lrlr_path(self, entry_price: float, dol_price: float, is_bullish: bool, pd_arrays: Dict[str, list]) -> Dict[str, Any]:
+        """
+        Step 4A: LRLR Check (CRITICAL — Required before entry) (Page 3).
+        Before entering, scan path from entry to DOL.
+        If bearish FVG or OB sits between buy entry and DOL -> HRLR -> Do not enter full size or skip.
+        """
+        if not dol_price or entry_price <= 0:
+            return {"is_lrlr": True, "label": "LRLR Path Clear (No Blockers)", "blockers": []}
+
+        blockers = []
+        if is_bullish:
+            # Check 30m bearish FVGs and OBs between entry_price and dol_price
+            all_bear = pd_arrays.get("bear_fvgs", []) + pd_arrays.get("bear_obs", [])
+            for arr in all_bear:
+                if arr["bottom"] > entry_price and arr["top"] < dol_price:
+                    blockers.append(arr)
+        else:
+            # Check 30m bullish FVGs and OBs between entry_price and dol_price
+            all_bull = pd_arrays.get("bull_fvgs", []) + pd_arrays.get("bull_obs", [])
+            for arr in all_bull:
+                if arr["top"] < entry_price and arr["bottom"] > dol_price:
+                    blockers.append(arr)
+
+        if len(blockers) == 0:
+            return {
+                "is_lrlr": True,
+                "label": "LRLR Path Clear (Zero Opposing Blockers)",
+                "blockers": []
+            }
+        else:
+            first_blocker = blockers[0]
+            return {
+                "is_lrlr": False,
+                "label": f"HRLR Blocked ({len(blockers)} opposing 30M {first_blocker['type']} @ {first_blocker['bottom']}-{first_blocker['top']})",
+                "blockers": blockers
+            }
+
+    def _detect_1m_cisd(self, c_1m: list, pd_array_zone: dict, is_bullish: bool, dec: int) -> Dict[str, Any]:
+        """
+        Step 4B: CISD — Change in State of Delivery (Page 3).
+        Faster than MSS. Detects institutional order flow flip on 1min.
+        Logic:
+          1. Find consecutive delivery candles that drove price into the PD array.
+          2. Mark opening price of FIRST candle in that run (run_start).
+          3. When a new 1M candle CLOSES above/below that opening price -> CISD confirmed!
+        """
+        if len(c_1m) < 4 or not pd_array_zone:
+            return {"cisd": False, "level": None, "swing_extreme": None, "label": "WAITING for 1M Candles"}
+
+        lookback = c_1m[-25:] if len(c_1m) >= 25 else c_1m
+
+        if is_bullish:
+            # Bearish run driving down into PD array
+            bearish_run_start = None
+            in_bearish_run = False
+            swing_low = min([c['low'] for c in lookback])
+
+            for i, c in enumerate(lookback):
+                if c['close'] < c['open'] and c['low'] > pd_array_zone.get("bottom", 0):
+                    if not in_bearish_run:
+                        bearish_run_start = c['open']
+                        in_bearish_run = True
+                elif in_bearish_run and c['low'] <= pd_array_zone.get("top", float("inf")):
+                    # Price entered PD array - watch for close above bearish_run_start
+                    if c['close'] > bearish_run_start:
+                        return {
+                            "cisd": True,
+                            "level": round(bearish_run_start, dec),
+                            "swing_extreme": round(swing_low, dec),
+                            "label": f"CONFIRMED (Closed above delivery open {round(bearish_run_start, dec)})"
+                        }
+            # Also check if latest candle closed above any intermediate swing high
+            swing_highs = [lookback[i]['high'] for i in range(1, len(lookback)-1) if lookback[i]['high'] >= lookback[i-1]['high'] and lookback[i]['high'] >= lookback[i+1]['high']]
+            if swing_highs and lookback[-1]['close'] > swing_highs[-1]:
+                return {
+                    "cisd": True,
+                    "level": round(swing_highs[-1], dec),
+                    "swing_extreme": round(swing_low, dec),
+                    "label": f"CONFIRMED (Closed above 1M Swing High {round(swing_highs[-1], dec)})"
+                }
+
+        else:
+            # Bullish run driving up into PD array
+            bullish_run_start = None
+            in_bullish_run = False
+            swing_high = max([c['high'] for c in lookback])
+
+            for i, c in enumerate(lookback):
+                if c['close'] > c['open'] and c['high'] < pd_array_zone.get("top", float("inf")):
+                    if not in_bullish_run:
+                        bullish_run_start = c['open']
+                        in_bullish_run = True
+                elif in_bullish_run and c['high'] >= pd_array_zone.get("bottom", 0):
+                    # Price entered PD array - watch for close below bullish_run_start
+                    if c['close'] < bullish_run_start:
+                        return {
+                            "cisd": True,
+                            "level": round(bullish_run_start, dec),
+                            "swing_extreme": round(swing_high, dec),
+                            "label": f"CONFIRMED (Closed below delivery open {round(bullish_run_start, dec)})"
+                        }
+            swing_lows = [lookback[i]['low'] for i in range(1, len(lookback)-1) if lookback[i]['low'] <= lookback[i-1]['low'] and lookback[i]['low'] <= lookback[i+1]['low']]
+            if swing_lows and lookback[-1]['close'] < swing_lows[-1]:
+                return {
+                    "cisd": True,
+                    "level": round(swing_lows[-1], dec),
+                    "swing_extreme": round(swing_high, dec),
+                    "label": f"CONFIRMED (Closed below 1M Swing Low {round(swing_lows[-1], dec)})"
+                }
+
+        return {
+            "cisd": False,
+            "level": None,
+            "swing_extreme": None,
+            "label": "WAITING (Institutional order flow not flipped)"
+        }
+
+    def _detect_1m_ifvg(self, c_1m: list, is_bullish: bool, dec: int) -> Dict[str, Any]:
+        """
+        Step 4C: IFVG — Inversion Fair Value Gap (Page 4).
+        A 1min opposing FVG that price breaks through with full candle bodies and retests as support/resistance.
+        """
+        if len(c_1m) < 6:
+            return {"ifvg": False, "level": None, "ce": None, "label": "WAITING for 1M FVGs"}
+
+        recent_5 = c_1m[-6:]
+
+        if is_bullish:
+            # Look for 1min Bearish FVGs inverted upward
+            for i in range(1, len(c_1m) - 2):
+                c_prev = c_1m[i-1]
+                c_next = c_1m[i+1]
+                if c_prev['low'] > c_next['high']:
+                    top = round(c_prev['low'], dec)
+                    bottom = round(c_next['high'], dec)
+                    ce = round((top + bottom) / 2, dec)
+                    
+                    # Broke above top with candle close?
+                    broke_above = any(c['close'] > top for c in recent_5)
+                    # Retested as support?
+                    retested = any(c['low'] <= top and c['close'] >= bottom for c in recent_5)
+                    if broke_above and retested:
+                        return {
+                            "ifvg": True,
+                            "level": top,
+                            "ce": ce,
+                            "label": f"CONFIRMED (Inverted Bearish FVG [{bottom}-{top}] Retested)"
+                        }
+        else:
+            # Look for 1min Bullish FVGs inverted downward
+            for i in range(1, len(c_1m) - 2):
+                c_prev = c_1m[i-1]
+                c_next = c_1m[i+1]
+                if c_prev['high'] < c_next['low']:
+                    top = round(c_next['low'], dec)
+                    bottom = round(c_prev['high'], dec)
+                    ce = round((top + bottom) / 2, dec)
+
+                    broke_below = any(c['close'] < bottom for c in recent_5)
+                    retested = any(c['high'] >= bottom and c['close'] <= top for c in recent_5)
+                    if broke_below and retested:
+                        return {
+                            "ifvg": True,
+                            "level": bottom,
+                            "ce": ce,
+                            "label": f"CONFIRMED (Inverted Bullish FVG [{bottom}-{top}] Retested)"
+                        }
+
+        return {"ifvg": False, "level": None, "ce": None, "label": "WAITING (No Inversion Retested)"}
+
+    def _check_smt(self, c_1m_primary: list, c_1m_corr: list, is_bullish: bool) -> bool:
+        """
+        Step 5: SMT Divergence (Page 5).
+        NAS100 swept low but correlated did not (bullish), or vice versa.
+        """
+        if len(c_1m_primary) < 10 or len(c_1m_corr) < 10:
+            return False
+
+        p_recent = c_1m_primary[-10:]
+        c_recent = c_1m_corr[-10:]
+
+        p_low = min([c['low'] for c in p_recent[-5:]])
+        p_prev_low = min([c['low'] for c in p_recent[:5]])
+        c_low = min([c['low'] for c in c_recent[-5:]])
+        c_prev_low = min([c['low'] for c in c_recent[:5]])
+
+        p_high = max([c['high'] for c in p_recent[-5:]])
+        p_prev_high = max([c['high'] for c in p_recent[:5]])
+        c_high = max([c['high'] for c in c_recent[-5:]])
+        c_prev_high = max([c['high'] for c in c_recent[:5]])
+
+        if is_bullish:
+            p_swept = p_low < p_prev_low
+            c_swept = c_low < c_prev_low
+            return (p_swept and not c_swept) or (not p_swept and c_swept)
+        else:
+            p_swept = p_high > p_prev_high
+            c_swept = c_high > c_prev_high
+            return (p_swept and not c_swept) or (not p_swept and c_swept)
+
+    def _check_ote(self, pd_array: dict, c_30m: list) -> bool:
+        """
+        OTE Confluence (61.8% - 78.6% Fib retracement) (Page 3 & 5).
+        """
+        if not pd_array or len(c_30m) < 4:
+            return False
+        recent = c_30m[-12:]
+        swing_high = max([c['high'] for c in recent])
+        swing_low = min([c['low'] for c in recent])
+        rng = swing_high - swing_low
+        if rng <= 0:
+            return False
+        fib_618 = swing_high - 0.618 * rng
+        fib_786 = swing_high - 0.786 * rng
+        arr_mid = pd_array.get("ce", (pd_array.get("top", 0) + pd_array.get("bottom", 0)) / 2)
+        return min(fib_618, fib_786) <= arr_mid <= max(fib_618, fib_786)
 
     def evaluate(self, market_data: Dict[str, Any], account_config: Dict[str, Any]) -> Dict[str, Any]:
+        symbol = market_data.get("symbol_name", "NAS100")
+        current_price = market_data.get("current_price", 0.0)
         c_1m = market_data.get("candles_1m", [])
         c_15m = market_data.get("candles_15m", [])
         c_30m = market_data.get("candles_30m", [])
         c_1h = market_data.get("candles_1h", [])
-        symbol = market_data.get("symbol_name", "NAS100")
-        current_price = market_data.get("current_price", 0.0)
+        c_corr = market_data.get("correlated_candles_1m", [])
 
         dec = 2 if "gold" in symbol.lower() else 1
 
-        if not c_1m or current_price == 0.0:
+        if not c_1m or current_price <= 0.0:
             return {
                 "strategy": self.name,
                 "decision": "Wait / No trade",
-                "reason": "Awaiting live market data feed.",
+                "reason": "Awaiting live market data stream.",
                 "checklist": {},
                 "order_ticket": None
             }
 
-        # 1. Higher-Timeframe Analysis (Weekly/Daily/4H/1H)
-        htf_info = self._determine_htf_bias(c_1h, current_price)
-        is_bullish = htf_info["is_bullish"]
+        # Midnight Open reference price (00:00 EST / 9:30 AM IST)
+        midnight_open = None
+        for c in c_1h[-24:]:
+            dt = datetime.datetime.fromtimestamp(c['timestamp'], tz=EST_TZ)
+            if dt.hour == 0:
+                midnight_open = c['open']
+                break
 
-        # 2. DOL Determination
-        dol_info = self._determine_dol(is_bullish, current_price, htf_info["high_24h"], htf_info["low_24h"], dec)
-        dol = dol_info["dol"]
+        # 1. Kill Zones & Session Windows (Page 1)
+        kz = self._get_session_and_killzones()
+        req_1_kz_active = kz["is_active"]
 
-        # 3. Session Window (IST)
-        session_info = self._get_ist_session()
+        # 2. HTF Bias Clear (Page 2)
+        bias_info = self._determine_htf_bias(c_1h, current_price, midnight_open)
+        req_2_bias_clear = (bias_info["bias"] in ["BULLISH", "BEARISH"])
+        is_bullish = bias_info["is_bullish"]
+        is_bearish = bias_info["is_bearish"]
 
-        # 4. 30M PD Array Selection
+        # 3. DOL Identified (Page 2)
+        dol_info = self._determine_dol(is_bullish, is_bearish, current_price, c_1h, dec)
+        dol_target = dol_info["dol"]
+        req_3_dol_identified = (dol_target is not None)
+
+        # 4. 30min PD Arrays & Tapped Rule (Page 3)
         if not c_30m and len(c_15m) >= 4:
+            # Resample 15m to 30m if needed
             c_30m = []
             for i in range(0, len(c_15m) - 1, 2):
                 c_30m.append({
@@ -293,164 +615,158 @@ class PraveenStrategy(BaseStrategy):
                     "timestamp": c_15m[i]['timestamp']
                 })
 
-        pd_array = self._find_30m_pd_array(c_30m, is_bullish, current_price, dec)
-
-        # 5. Check 30M Tap Status across recent 1M candles (last 20 mins)
-        lookback_1m = c_1m[-20:] if len(c_1m) >= 20 else c_1m
-        recent_1m_high = max([c['high'] for c in lookback_1m])
-        recent_1m_low = min([c['low'] for c in lookback_1m])
+        pd_arrays = self._find_30m_pd_arrays(c_30m, dec)
+        
+        # Pick relevant 30M array based on bias
+        active_pd_array = None
+        req_4_array_tapped = False
+        tapped_label = "Scanning 30M PD Arrays"
 
         if is_bullish:
-            array_tapped = (recent_1m_low <= pd_array["high"] and recent_1m_high >= pd_array["low"]) or (pd_array["low"] <= current_price <= pd_array["high"])
+            candidates = [a for a in pd_arrays["bull_fvgs"] + pd_arrays["bull_obs"] if a["bottom"] <= current_price]
+            if candidates:
+                active_pd_array = min(candidates, key=lambda x: abs(x["ce"] - current_price))
+                # Tapped rule: price within bottom and top or recent 1M low tapped into it
+                recent_1m_low = min([c['low'] for c in c_1m[-20:]])
+                req_4_array_tapped = (current_price >= active_pd_array["bottom"] and current_price <= active_pd_array["top"]) or (recent_1m_low <= active_pd_array["top"])
+                tapped_label = f"TAPPED [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]" if req_4_array_tapped else f"WAITING for Tap [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]"
+        elif is_bearish:
+            candidates = [a for a in pd_arrays["bear_fvgs"] + pd_arrays["bear_obs"] if a["top"] >= current_price]
+            if candidates:
+                active_pd_array = min(candidates, key=lambda x: abs(x["ce"] - current_price))
+                recent_1m_high = max([c['high'] for c in c_1m[-20:]])
+                req_4_array_tapped = (current_price <= active_pd_array["top"] and current_price >= active_pd_array["bottom"]) or (recent_1m_high >= active_pd_array["bottom"])
+                tapped_label = f"TAPPED [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]" if req_4_array_tapped else f"WAITING for Tap [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]"
+
+        # 5. LRLR Path Clear Check (Page 3)
+        lrlr_info = self._check_lrlr_path(current_price, dol_target, is_bullish, pd_arrays)
+        req_5_lrlr_clear = lrlr_info["is_lrlr"]
+
+        # 6. 1min CISD Confirmed (Page 3)
+        cisd_info = self._detect_1m_cisd(c_1m, active_pd_array, is_bullish, dec) if req_4_array_tapped else {"cisd": False, "level": None, "swing_extreme": None, "label": "WAITING (30M array not tapped)"}
+        req_6_cisd_confirmed = cisd_info["cisd"]
+
+        # 7. 1min IFVG Confirmed (Page 4)
+        ifvg_info = self._detect_1m_ifvg(c_1m, is_bullish, dec) if req_4_array_tapped else {"ifvg": False, "level": None, "ce": None, "label": "WAITING (30M array not tapped)"}
+        req_7_ifvg_confirmed = ifvg_info["ifvg"]
+
+        # 8. Minimum 1:2 R:R (Page 4)
+        # Entry level: C.E. of 1min IFVG / FVG
+        entry_price = ifvg_info.get("ce") or ifvg_info.get("level") or current_price
+        sl_buffer = 4.0 if symbol == "NAS100" else 1.5
+
+        if is_bullish:
+            sl_price = round((cisd_info.get("swing_extreme") or current_price) - sl_buffer, dec)
+            sl_dist = abs(entry_price - sl_price)
+            tp_price = round(entry_price + sl_dist * 2.0, dec)
+            if dol_target and dol_target > tp_price:
+                tp_price = round(dol_target, dec)
         else:
-            array_tapped = (recent_1m_high >= pd_array["low"] and recent_1m_low <= pd_array["high"]) or (pd_array["low"] <= current_price <= pd_array["high"])
+            sl_price = round((cisd_info.get("swing_extreme") or current_price) + sl_buffer, dec)
+            sl_dist = abs(sl_price - entry_price)
+            tp_price = round(entry_price - sl_dist * 2.0, dec)
+            if dol_target and dol_target < tp_price:
+                tp_price = round(dol_target, dec)
 
-        tap_status = "30M PD ARRAY TAPPED — CHECK 1M" if array_tapped else f"WAITING FOR 30M TAP [{pd_array['low']} - {pd_array['high']}]"
+        calculated_rr = abs(tp_price - entry_price) / max(0.1, sl_dist)
+        req_8_rr_valid = (calculated_rr >= 1.8)
 
-        # 6. 1M Execution Confirmation (IFVG + CISD)
-        has_ifvg = False
-        has_cisd = False
-        invalidation_level = None
-        poi_entry = None
+        # 4 BONUS Criteria (Page 5)
+        bonus_1_smt = self._check_smt(c_1m, c_corr, is_bullish)
+        bonus_2_ssmt = (bonus_1_smt and kz["is_quarter_boundary"])
+        bonus_3_ote = self._check_ote(active_pd_array, c_30m)
+        bonus_4_macro = (kz["is_silver_bullet"] or kz["is_macro"])
 
-        if array_tapped and len(lookback_1m) >= 4:
-            if is_bullish:
-                invalidation_level = min([c['low'] for c in lookback_1m])
-                # Check 1M Bullish IFVG (Bearish FVG traded through upward)
-                for i in range(2, len(lookback_1m) - 1):
-                    if lookback_1m[i-2]['low'] > lookback_1m[i]['high']:
-                        subsequent_closes = [c['close'] for c in lookback_1m[i+1:]]
-                        if any(cl > lookback_1m[i-2]['low'] for cl in subsequent_closes):
-                            has_ifvg = True
-                            poi_entry = round((lookback_1m[i-2]['low'] + lookback_1m[i]['high']) / 2, dec)
-                            break
+        # Setup Grade Calculation (Page 6)
+        required_list = [
+            req_1_kz_active, req_2_bias_clear, req_3_dol_identified, req_4_array_tapped,
+            req_5_lrlr_clear, req_6_cisd_confirmed, req_7_ifvg_confirmed, req_8_rr_valid
+        ]
+        bonus_list = [bonus_1_smt, bonus_2_ssmt, bonus_3_ote, bonus_4_macro]
 
-                # Check 1M Bullish CISD (Displacement breaking intermediate down-close delivery candle or swing high)
-                down_candles = [c for c in lookback_1m if c['close'] < c['open']]
-                if down_candles and current_price > down_candles[-1]['open']:
-                    has_cisd = True
-                swing_highs_1m = [lookback_1m[i]['high'] for i in range(1, len(lookback_1m)-1) if lookback_1m[i]['high'] >= lookback_1m[i-1]['high'] and lookback_1m[i]['high'] >= lookback_1m[i+1]['high']]
-                if swing_highs_1m and current_price >= swing_highs_1m[-1]:
-                    has_cisd = True
-            else:
-                invalidation_level = max([c['high'] for c in lookback_1m])
-                # Check 1M Bearish IFVG (Bullish FVG traded through downward)
-                for i in range(2, len(lookback_1m) - 1):
-                    if lookback_1m[i]['low'] > lookback_1m[i-2]['high']:
-                        subsequent_closes = [c['close'] for c in lookback_1m[i+1:]]
-                        if any(cl < lookback_1m[i-2]['high'] for cl in subsequent_closes):
-                            has_ifvg = True
-                            poi_entry = round((lookback_1m[i-2]['high'] + lookback_1m[i]['low']) / 2, dec)
-                            break
+        req_count = sum(1 for r in required_list if r)
+        bonus_count = sum(1 for b in bonus_list if b)
 
-                # Check 1M Bearish CISD (Displacement breaking intermediate up-close delivery candle or swing low)
-                up_candles = [c for c in lookback_1m if c['close'] > c['open']]
-                if up_candles and current_price < up_candles[-1]['open']:
-                    has_cisd = True
-                swing_lows_1m = [lookback_1m[i]['low'] for i in range(1, len(lookback_1m)-1) if lookback_1m[i]['low'] <= lookback_1m[i-1]['low'] and lookback_1m[i]['low'] <= lookback_1m[i+1]['low']]
-                if swing_lows_1m and current_price <= swing_lows_1m[-1]:
-                    has_cisd = True
+        if req_count == 8 and bonus_count >= 3:
+            grade = "A+"
+            action = "EXECUTE NOW"
+            size = "Full Size (100%)"
+        elif req_count == 8:
+            grade = "A"
+            action = "Execute"
+            size = "Normal Size (100%)"
+        elif req_count == 7:
+            grade = "B"
+            action = "Proceed with caution"
+            size = "Reduced (50%)"
+        else:
+            grade = "C"
+            action = "DO NOT TRADE"
+            size = "Skip entirely"
 
+        # Complete Strategy Flow Verification Checklist (Page 5)
         checklist = {
-            "1. HTF Bias & Context": htf_info["bias_label"],
-            "2. Draw on Liquidity (DOL)": dol_info["label"],
-            "3. Session Window (IST)": session_info["label"],
-            "4. 30M PD Array": pd_array["label"],
-            "5. 30M Tap Alert": tap_status,
-            "6. 1M Recent Swing": f"Ref Extreme: {round(invalidation_level, dec)}" if invalidation_level else ("WAITING (Locked until 30M tap)" if not array_tapped else "Monitoring for Swing"),
-            "7. 1M IFVG Confirmation": "CONFIRMED (Valid IFVG Inversion)" if has_ifvg else ("FORMING" if array_tapped else "WAITING"),
-            "8. 1M CISD Confirmation": "CONFIRMED (State of Delivery Shifted)" if has_cisd else ("FORMING" if array_tapped else "WAITING"),
-            "9. Execution & Goat Safe": "SAFE ($2.50 Risk | 1:2+ R:R | <15% Cap)"
+            "1. Kill Zone Active": f"{'YES' if req_1_kz_active else 'WAITING'} ({kz['name']})",
+            "2. HTF Bias Clear": f"{'PASS' if req_2_bias_clear else 'FAIL'} ({bias_info['label']})",
+            "3. Draw on Liquidity (DOL)": f"{'PASS' if req_3_dol_identified else 'FAIL'} ({dol_info['label']})",
+            "4. 30min PD Array Tapped": f"{'PASS' if req_4_array_tapped else 'WAITING'} ({tapped_label})",
+            "5. LRLR Path Clear": f"{'PASS' if req_5_lrlr_clear else 'FAIL'} ({lrlr_info['label']})",
+            "6. 1min CISD Confirmed": f"{'CONFIRMED' if req_6_cisd_confirmed else 'WAITING'} ({cisd_info['label']})",
+            "7. 1min IFVG Confirmed": f"{'CONFIRMED' if req_7_ifvg_confirmed else 'WAITING'} ({ifvg_info['label']})",
+            "8. Minimum 1:2 R:R": f"{'PASS' if req_8_rr_valid else 'FAIL'} (1:{calculated_rr:.2f} R:R Target)",
+            "9. Setup Grade & Action": f"Grade {grade} [{req_count}/8 Req, {bonus_count}/4 Bonus] -> {action} ({size})",
+            "10. SMT Divergence": f"{'CONFIRMED' if bonus_1_smt else 'None'} (NAS100 vs Correlated)",
+            "11. SSMT at Quarter Boundary": f"{'CONFIRMED' if bonus_2_ssmt else 'None'} ({kz['quarter']})",
+            "12. OTE Zone (61.8%–78.6%)": f"{'CONFIRMED' if bonus_3_ote else 'None'} (Fib OTE Sweet Spot)",
+            "13. Silver Bullet / Macro Window": f"{'ACTIVE' if bonus_4_macro else 'Outside'} ({kz['phase']})",
+            "14. Execution & Goat Safe": "SAFE ($2.50 Risk | 1:2+ R:R | <15% Cap)"
         }
 
-        # Stand aside if 30M PD array is not tapped yet
-        if not array_tapped:
-            return {
-                "strategy": self.name,
-                "decision": "Wait / No trade",
-                "reason": f"Waiting for price to tap 30M PD Array [{pd_array['label']}]. Do not anticipate.",
-                "checklist": checklist,
-                "order_ticket": None
-            }
+        # Notification Trigger Rules (Page 6)
+        # Fire alert when ALL conditions are met: grade == "A+" or grade == "A"
+        is_alert_grade = (grade in ["A+", "A"])
+        decision = f"{'Buy' if is_bullish else 'Sell'} limit" if is_alert_grade else "Wait / No trade"
 
-        # If 30M tapped but 1M IFVG + CISD not yet confirmed:
-        if not (has_ifvg and has_cisd):
-            return {
-                "strategy": self.name,
-                "decision": "Wait / No trade",
-                "reason": "30M PD Array tapped! Monitoring 1M chart for IFVG inversion and CISD delivery change.",
-                "checklist": checklist,
-                "order_ticket": None
-            }
-
-        # Complete Confirmation Sequence Satisfied!
-        risk_dollars = account_config.get("risk_per_trade", 2.50)
-        entry = poi_entry if (poi_entry and abs(poi_entry - current_price) < (30.0 if symbol == "NAS100" else 8.0)) else current_price
-        sl_buffer = 3.0 if symbol == "NAS100" else 1.0
-
-        if is_bullish:
-            sl = round((invalidation_level or entry) - sl_buffer, dec)
-            sl_dist = abs(entry - sl)
-            min_sl_dist = 4.0 if symbol == "NAS100" else 1.5
-            if sl_dist < min_sl_dist:
-                sl_dist = min_sl_dist
-                sl = round(entry - sl_dist, dec)
-
-            req_tp = entry + sl_dist * 2.2
-            tp = round(max(dol, req_tp), dec)
-            tp_dist = abs(tp - entry)
-            rr = tp_dist / sl_dist if sl_dist > 0 else 2.2
-
-            projected_gain = round(risk_dollars * rr, 2)
-            ticket = {
-                "Order Type": "BUY LIMIT",
-                "Instrument": symbol,
-                "Entry Price": round(entry, dec),
-                "Stop Loss": round(sl, dec),
-                "Take Profit": round(tp, dec),
-                "R:R": f"1:{round(rr, 2)}",
-                "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
-                "Projected Profit": f"+${projected_gain:.2f}",
-                "Consistency Impact": f"{round((projected_gain / 100.0) * 100, 1)}% (< 15% Cap Safe)",
-                "Cancel If": f"Price closes below 1M Invalidation ({round(sl, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
-            }
-            return {
-                "strategy": self.name,
-                "decision": "Buy limit",
-                "reason": f"30M PD Array tapped -> 1M IFVG + CISD confirmed -> R:R 1:{round(rr, 2)} to DOL ({tp}).",
-                "checklist": checklist,
-                "order_ticket": ticket
-            }
+        if is_alert_grade:
+            reason = f"🎯 Grade {grade} SETUP — {symbol} | {bias_info['bias']} Signal | Entry: {entry_price} | SL: {sl_price} | TP: {tp_price} | R:R: 1:{calculated_rr:.2f}"
         else:
-            sl = round((invalidation_level or entry) + sl_buffer, dec)
-            sl_dist = abs(sl - entry)
-            min_sl_dist = 4.0 if symbol == "NAS100" else 1.5
-            if sl_dist < min_sl_dist:
-                sl_dist = min_sl_dist
-                sl = round(entry + sl_dist, dec)
+            if not req_1_kz_active:
+                reason = f"Outside Kill Zones. Next session: London (11:30 AM IST) / NY (4:30 PM IST). Grade {grade}."
+            elif not req_4_array_tapped:
+                reason = f"Waiting for price to tap 30min PD Array. Do not anticipate. Grade {grade}."
+            elif not req_5_lrlr_clear:
+                reason = f"High Resistance Liquidity Run (HRLR) detected on path to DOL. Grade {grade}."
+            elif not (req_6_cisd_confirmed and req_7_ifvg_confirmed):
+                reason = f"30min array tapped! Monitoring 1min for CISD order flow flip + IFVG confirmation. Grade {grade}."
+            else:
+                reason = f"Setup Grade {grade} [{req_count}/8 Req] — {action}."
 
-            req_tp = entry - sl_dist * 2.2
-            tp = round(min(dol, req_tp), dec)
-            tp_dist = abs(entry - tp)
-            rr = tp_dist / sl_dist if sl_dist > 0 else 2.2
+        order_ticket = None
+        if is_alert_grade:
+            risk_dollars = account_config.get("risk_per_trade", 2.50)
+            projected_gain = round(risk_dollars * calculated_rr, 2)
+            consistency_pct = round((projected_gain / 100.0) * 100, 1)
 
-            projected_gain = round(risk_dollars * rr, 2)
-            ticket = {
-                "Order Type": "SELL LIMIT",
+            order_ticket = {
+                "Order Type": f"{'BUY' if is_bullish else 'SELL'} LIMIT ({grade} SETUP)",
                 "Instrument": symbol,
-                "Entry Price": round(entry, dec),
-                "Stop Loss": round(sl, dec),
-                "Take Profit": round(tp, dec),
-                "R:R": f"1:{round(rr, 2)}",
+                "Entry Price": round(entry_price, dec),
+                "Stop Loss": round(sl_price, dec),
+                "Take Profit": round(tp_price, dec),
+                "R:R": f"1:{calculated_rr:.2f}",
                 "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
                 "Projected Profit": f"+${projected_gain:.2f}",
-                "Consistency Impact": f"{round((projected_gain / 100.0) * 100, 1)}% (< 15% Cap Safe)",
-                "Cancel If": f"Price closes above 1M Invalidation ({round(sl, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
+                "Consistency Impact": f"{consistency_pct}% (< 15% Cap Safe)",
+                "Cancel If": f"Price closes a candle body beyond the swing {'low' if is_bullish else 'high'} ({sl_price}) that created the CISD — trade is invalidated immediately."
             }
-            return {
-                "strategy": self.name,
-                "decision": "Sell limit",
-                "reason": f"30M PD Array tapped -> 1M IFVG + CISD confirmed -> R:R 1:{round(rr, 2)} to DOL ({tp}).",
-                "checklist": checklist,
-                "order_ticket": ticket
-            }
+
+        return {
+            "strategy": self.name,
+            "decision": decision,
+            "reason": reason,
+            "checklist": checklist,
+            "order_ticket": order_ticket,
+            "grade": grade,
+            "action": action,
+            "size": size
+        }
