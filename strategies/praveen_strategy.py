@@ -813,7 +813,7 @@ class PraveenStrategy(BaseStrategy):
         decision = f"{'Buy' if is_bullish else 'Sell'} limit" if is_alert_grade else "Wait / No trade"
 
         if is_alert_grade:
-            reason = f"🎯 Grade {grade} SETUP — {symbol} | {bias_info['bias']} Signal | Entry: {entry_price} | SL: {sl_price} | TP: {tp_price} | R:R: 1:{calculated_rr:.2f}"
+            reason = f"🎯 Grade {grade} SETUP - {symbol} | {bias_info['bias']} Signal | Entry: {entry_price} | SL: {sl_price} | TP: {tp_price} | R:R: 1:{calculated_rr:.2f}"
         else:
             if not req_1_kz_active:
                 reason = f"Outside Kill Zones. Next session: London (11:30 AM IST) / NY (4:30 PM IST). Grade {grade}."
@@ -824,7 +824,7 @@ class PraveenStrategy(BaseStrategy):
             elif not (req_6_cisd_confirmed and req_7_ifvg_confirmed):
                 reason = f"30min array tapped! Monitoring 1min for CISD order flow flip + IFVG confirmation. Grade {grade}."
             else:
-                reason = f"Setup Grade {grade} [{req_count}/8 Req] — {action}."
+                reason = f"Setup Grade {grade} [{req_count}/8 Req] - {action}."
 
         order_ticket = None
         if is_alert_grade:
@@ -842,7 +842,7 @@ class PraveenStrategy(BaseStrategy):
                 "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
                 "Projected Profit": f"+${projected_gain:.2f}",
                 "Consistency Impact": f"{consistency_pct}% (< 15% Cap Safe)",
-                "Cancel If": f"Price closes a candle body beyond the swing {'low' if is_bullish else 'high'} ({sl_price}) that created the CISD — trade is invalidated immediately."
+                "Cancel If": f"Price closes a candle body beyond the swing {'low' if is_bullish else 'high'} ({sl_price}) that created the CISD - trade is invalidated immediately."
             }
 
         return {
