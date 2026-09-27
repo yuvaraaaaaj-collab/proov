@@ -13,7 +13,7 @@ Implements the complete ICT Market Maker Framework synthesizing all 24 lessons:
   8. Judas Swing Detection (Lesson 12) — London false expansion & reversal
   9. Daily Bias & PDH/PDL Liquidity (Lesson 13) — Prior Day High & Low targets
   10. Confluence Swing Points (Lesson 14) — Filtering out floating noise
-  11. SMT Divergence (Lesson 16) — Real-time correlated comparison (NAS100 vs GOLD)
+  11. SMT Divergence (Lesson 16) — Real-time correlated comparison (NAS100 vs SPX500 / NQ vs MES)
   12. ATM Method (Lesson 17) — Two-stage high/low rejection pattern
   13. OTE Primer (Lesson 18) — 61.8% to 79.0% Fib retracement sweet spot
   14. Explosive Move / Compression Coiling (Lesson 22) — Pre-breakout ATR squeeze
@@ -33,6 +33,8 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
 from .base_strategy import BaseStrategy
+from backend.risk_engine import build_order_ticket, sl_buffer, MIN_RR, DEFAULT_ACCOUNT_BALANCE
+from backend.smt_engine import check_smt_divergence
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +101,7 @@ class ICTConfig:
     atr_window: int = 14
     smt_time_tolerance_bars: int = 3
     lookback_bars_for_model: int = 120
-    min_risk_reward: float = 1.8
+    min_risk_reward: float = MIN_RR
 
 
 # ---------------------------------------------------------------------------
@@ -396,28 +398,9 @@ def _price_in_zone(price: float, zone: dict, tolerance_frac: float = 0.0015) -> 
 
 
 def _smt_divergence_recent(df_a: pd.DataFrame, df_b: pd.DataFrame, cfg: ICTConfig, lookback: int) -> Optional[str]:
-    """Lesson 16: Smart Money Technique (SMT) Divergence between correlated symbols."""
-    a = df_a.tail(lookback)
-    b = df_b.tail(lookback + cfg.smt_time_tolerance_bars * 2)
-    tol = pd.Timedelta(minutes=cfg.smt_time_tolerance_bars * 5)
-
-    a_highs = a[a["swing_high"]]["high"]
-    if len(a_highs) >= 2 and a_highs.iloc[-1] > a_highs.iloc[-2]:
-        ts = a_highs.index[-1]
-        b_window = b[(b.index >= ts - tol) & (b.index <= ts + tol)]
-        b_prior = b[b.index < b_window.index.min()]["high"].max() if not b_window.empty and not b[b.index < b_window.index.min()].empty else None
-        if b_prior is not None and not (b_window["high"] > b_prior).any():
-            return "bearish"  # SMT Bearish Divergence (Asset A made higher high, Asset B failed)
-
-    a_lows = a[a["swing_low"]]["low"]
-    if len(a_lows) >= 2 and a_lows.iloc[-1] < a_lows.iloc[-2]:
-        ts = a_lows.index[-1]
-        b_window = b[(b.index >= ts - tol) & (b.index <= ts + tol)]
-        b_prior = b[b.index < b_window.index.min()]["low"].min() if not b_window.empty and not b[b.index < b_window.index.min()].empty else None
-        if b_prior is not None and not (b_window["low"] < b_prior).any():
-            return "bullish"  # SMT Bullish Divergence (Asset A made lower low, Asset B failed)
-
-    return None
+    """Lesson 16: Smart Money Technique (SMT) Divergence between correlated symbols (e.g. NAS100 vs SPX500)."""
+    res = check_smt_divergence(df_a, df_b, lookback=lookback)
+    return res.get("divergence")
 
 
 def _calculate_weekly_bias(w_df: pd.DataFrame, h1_df: pd.DataFrame = None) -> Dict[str, Any]:
@@ -660,24 +643,22 @@ class ICTMarketMakerStrategy(BaseStrategy):
         entry = chosen["entry"]
         sl = chosen["stop_loss"]
         tp = chosen["take_profit"]
-        rr = chosen["risk_reward"] or 2.2
-        projected_gain = round(risk_dollars * rr, 2)
-        consistency_pct = round((projected_gain / 100.0) * 100, 1)
+        rr = chosen["risk_reward"] or MIN_RR
+        account_bal = account_config.get("account_balance") or account_config.get("balance", DEFAULT_ACCOUNT_BALANCE)
 
-        order_type = f"{direction_str} LIMIT"
-        ticket = {
-            "Order Type": order_type,
-            "Instrument": symbol,
-            "Entry Price": round(entry, dec),
-            "Stop Loss": round(sl, dec),
-            "Take Profit": round(tp, dec),
-            "Take Profit 1 (Scale)": round(chosen.get("tp_scaled") or tp, dec),
-            "R:R": f"1:{rr:.2f}",
-            "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
-            "Projected Profit": f"+${projected_gain:.2f}",
-            "Consistency Impact": f"{consistency_pct}% (< 15% Cap Safe)",
-            "Cancel If": f"Price closes beyond Invalidation ({round(sl, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
-        }
+        ticket = build_order_ticket(
+            direction=direction_str,
+            symbol=symbol,
+            entry=entry,
+            stop_loss=sl,
+            take_profit=tp,
+            risk_dollars=risk_dollars,
+            account_balance=account_bal,
+            order_type=f"{direction_str} LIMIT",
+            cancel_condition=f"Price closes beyond Invalidation ({round(sl, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
+        )
+        if chosen.get("tp_scaled"):
+            ticket["Take Profit 1 (Scale)"] = round(chosen["tp_scaled"], dec)
 
         return {
             "strategy": self.name,
@@ -747,13 +728,12 @@ class ICTMarketMakerStrategy(BaseStrategy):
             key="entry_fvg", label=f"Unfilled {wanted_fvg_side} FVG available", met=item6_met
         ))
 
-        # 7) SMT divergence (Lesson 16 — optional booster)
-        smt_dir = None
-        if correlated_df is not None and len(correlated_df) > 10:
-            smt_dir = _smt_divergence_recent(ltf_df, correlated_df, cfg, lookback)
+        # 7) SMT divergence (Lesson 16 — optional booster via smt_engine)
+        smt_res = check_smt_divergence(ltf_df, correlated_df, lookback=lookback, symbol=symbol)
+        smt_dir = smt_res.get("divergence")
         wanted_smt_dir = "bearish" if direction == "short" else "bullish"
         item7_met = (smt_dir == wanted_smt_dir)
-        smt_label = f"CONFIRMED ({smt_dir.upper()} Divergence)" if item7_met else (f"Divergence opposite ({smt_dir.upper()})" if smt_dir else "None (Correlated In Line)")
+        smt_label = f"CONFIRMED ({smt_res.get('type', 'SMT Divergence')})" if item7_met else (f"Divergence opposite ({smt_dir.upper()})" if smt_dir else "None (Correlated In Line)")
 
         required = checklist[:6]
         required_met = sum(1 for c in required if c.met)
@@ -767,10 +747,10 @@ class ICTMarketMakerStrategy(BaseStrategy):
         dol_label = "Scanning Liquidity Targets"
 
         if entry_fvg is not None and mss is not None:
+            buf = sl_buffer(symbol)
             if direction == "short":
                 entry = float(entry_fvg["top"])
-                sl_buffer = 4.0 if symbol == "NAS100" else 1.5
-                stop_loss = float(mss["broken_level"]) + sl_buffer
+                stop_loss = float(mss["broken_level"]) + buf
                 opposing_pools = [p for p in pools if p["side"] == "sell_side" and not p["swept"] and p["level"] < entry]
                 
                 # Lesson 13: PDL target
@@ -787,8 +767,7 @@ class ICTMarketMakerStrategy(BaseStrategy):
 
             else:
                 entry = float(entry_fvg["bottom"])
-                sl_buffer = 4.0 if symbol == "NAS100" else 1.5
-                stop_loss = float(mss["broken_level"]) - sl_buffer
+                stop_loss = float(mss["broken_level"]) - buf
                 opposing_pools = [p for p in pools if p["side"] == "buy_side" and not p["swept"] and p["level"] > entry]
                 
                 # Lesson 13: PDH target
@@ -807,9 +786,9 @@ class ICTMarketMakerStrategy(BaseStrategy):
             reward = abs(take_profit - entry)
             risk_reward = round(reward / risk, 2) if risk > 0 else None
 
-            if risk_reward is not None and risk_reward < cfg.min_risk_reward:
+            if risk_reward is not None and risk_reward < MIN_RR:
                 active = False
-                notes = f"Checklist satisfied but R:R ({risk_reward:.2f}) < minimum ({cfg.min_risk_reward}). Standing aside."
+                notes = f"Checklist satisfied but R:R ({risk_reward:.2f}) < minimum ({MIN_RR}). Standing aside."
 
         entry_fvg_label = f"{entry_fvg['bottom']:.{dec}f} - {entry_fvg['top']:.{dec}f}" if entry_fvg else None
 

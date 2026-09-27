@@ -1,6 +1,7 @@
 import datetime
 from typing import Dict, Any, Optional
 from .base_strategy import BaseStrategy
+from backend.risk_engine import build_order_ticket, sl_buffer, MIN_RR, DEFAULT_ACCOUNT_BALANCE
 
 class SMCLiquidityMasterStrategy(BaseStrategy):
     """
@@ -50,7 +51,7 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
         h4_range_mid = (h4_high + h4_low) / 2
         h4_bias = "BULLISH FLOW (Trading in Premium)" if current_price > h4_range_mid else "BEARISH FLOW (Trading in Discount)"
 
-        # 2. Authentic Session Context & PDH/PDL from Daily Candles
+        # 2. Authentic Session Context & PDH/PDL from Previous Completed Daily Candle ONLY (#11 fix)
         if c_1d and len(c_1d) >= 2:
             pdh = c_1d[-2]['high']
             pdl = c_1d[-2]['low']
@@ -60,24 +61,20 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
         else:
             pdh = max([c['high'] for c in c_1h]) if c_1h else current_price
             pdl = min([c['low'] for c in c_1h]) if c_1h else current_price
-        
-        # Align with TradingView Day High and Low for exact chart match
+
+        # Intraday reference levels kept strictly separate from PDH/PDL
         day_high = market_data.get("day_high", 0.0)
         day_low = market_data.get("day_low", 0.0)
-        if day_high > 0:
-            pdh = day_high
-        if day_low > 0:
-            pdl = day_low
 
         # 3. 15M Liquidity & Inducement
         recent_15m = c_15m[-16:] if len(c_15m) >= 16 else c_15m
         bsl_15m = max([c['high'] for c in recent_15m[:-1]]) if len(recent_15m) > 1 else recent_15m[0]['high']
         ssl_15m = min([c['low'] for c in recent_15m[:-1]]) if len(recent_15m) > 1 else recent_15m[0]['low']
 
-        # 4. Session Timing (NY Session: 12:00 to 20:00 UTC is Priority Window)
+        # 4. Session Timing (NY / Pre-NY Priority Window: 12:00 to 20:00 UTC) (#13 load-bearing gate)
         now_utc = datetime.datetime.utcnow()
-        is_ny_session = 12 <= now_utc.hour <= 20
-        session_label = f"Pre-NY / NY Session [{now_utc.strftime('%H:%M')} UTC] (Priority Window)" if is_ny_session else f"Asian / Euro Session [{now_utc.strftime('%H:%M')} UTC] (Active 24H Scan)"
+        is_ny_session = (12 <= now_utc.hour <= 20)
+        session_label = f"Pre-NY / NY Session [{now_utc.strftime('%H:%M')} UTC] (ACTIVE)" if is_ny_session else f"Outside Priority Window [{now_utc.strftime('%H:%M')} UTC] (GATED)"
 
         # 5. Liquidity Sweep Detection (Past 12 1M candles)
         recent_1m_high = max([c['high'] for c in c_1m[-12:]])
@@ -88,7 +85,8 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
 
         checklist = {
             "4H Swing Bias": h4_bias,
-            "1H Session Context": f"Day High: {round(pdh, dec)} | Day Low: {round(pdl, dec)}",
+            "1H Session Context": f"PDH: {round(pdh, dec)} | PDL: {round(pdl, dec)}",
+            "Today's Intraday Range": f"High: {round(day_high, dec)} | Low: {round(day_low, dec)}" if day_high > 0 else "---",
             "15M Liquidity": f"BSL: {round(bsl_15m, dec)} | SSL: {round(ssl_15m, dec)}",
             "Session Timing": session_label,
             "Liquidity Taken": "YES" if (bsl_swept or ssl_swept) else "NO",
@@ -98,15 +96,27 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
             "Mitigation Check": "WAITING"
         }
 
+        # Gate on session timing (#13)
+        if not is_ny_session:
+            return {
+                "strategy": self.name,
+                "decision": "Wait / No trade",
+                "reason": f"Outside London/NY Priority Session Window [{now_utc.strftime('%H:%M')} UTC]. Stand aside.",
+                "checklist": checklist,
+                "order_ticket": None
+            }
+
         decision = "Wait / No trade"
         reason = "Awaiting 15M liquidity sweep and subsequent 1M structural sequence."
         order_ticket = None
 
-        # Risk parameters
+        # Standardized Risk parameters (#9, #15)
         risk_dollars = account_config.get("risk_per_trade", 2.50)
-        min_rr = account_config.get("min_rr", 1.8)
+        account_bal = account_config.get("balance", DEFAULT_ACCOUNT_BALANCE)
+        min_rr = account_config.get("min_rr", MIN_RR)
+        buf = sl_buffer(symbol)
 
-        # 6. Evaluation of 1M Structure Post-Sweep (Active 24H Continuous Scan)
+        # 6. Evaluation of 1M Structure Post-Sweep
         if bsl_swept and len(c_1m) >= 4:
             # Look for 1M Bearish BOS (closing below recent 1M swing low)
             start_i = max(1, len(c_1m) - 15)
@@ -125,12 +135,11 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                 poi_entry = (protected_high + current_price) / 2
                 checklist["POI Formed"] = f"1M Supply @ {round(poi_entry, dec)}"
                 
-                # SL: beyond Protected High with buffer
-                sl_buffer = 4.0 if symbol == "NAS100" else 1.5
-                sl = protected_high + sl_buffer
+                # SL: beyond Protected High with standardized buffer
+                sl = protected_high + buf
                 sl_distance = abs(sl - poi_entry)
 
-                # TP: Target opposing SSL, but cap at 1:3.0 R:R to respect Goat $1k scalping consistency
+                # TP: Target opposing SSL, capped at 1:3.0 R:R for Goat consistency
                 ideal_tp = ssl_15m
                 max_tp_dist = sl_distance * 3.0
                 if abs(poi_entry - ideal_tp) > max_tp_dist:
@@ -143,21 +152,18 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                 
                 if rr >= min_rr:
                     decision = "Sell limit"
-                    reason = f"15M BSL swept -> 1M Bearish BOS -> Valid POI Retracement with 1:{round(rr, 1)} R:R."
-                    projected_gain = round(risk_dollars * rr, 2)
-                    consistency_impact = round((projected_gain / 100.0) * 100, 1)
-                    order_ticket = {
-                        "Order Type": "SELL LIMIT",
-                        "Instrument": symbol,
-                        "Entry Price": round(poi_entry, dec),
-                        "Stop Loss": round(sl, dec),
-                        "Take Profit": round(tp, dec),
-                        "R:R": f"1:{round(rr, 2)}",
-                        "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
-                        "Projected Profit": f"+${projected_gain:.2f}",
-                        "Consistency Impact": f"{consistency_impact}% (< 15% Cap Safe)",
-                        "Cancel If": f"Price breaks above Protected High ({round(protected_high, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
-                    }
+                    reason = f"15M BSL swept -> 1M Bearish BOS -> Valid POI Retracement with 1:{round(rr, 2)} R:R."
+                    order_ticket = build_order_ticket(
+                        order_type="SELL LIMIT",
+                        symbol=symbol,
+                        entry_price=poi_entry,
+                        stop_loss=sl,
+                        take_profit=tp,
+                        account_balance=account_bal,
+                        risk_per_trade=risk_dollars,
+                        cancel_if=f"Price breaks above Protected High ({round(protected_high, dec)}) or sweeps TP ({round(tp, dec)}) before fill.",
+                        min_rr=min_rr
+                    )
 
         elif ssl_swept and len(c_1m) >= 4:
             # Look for 1M Bullish BOS (closing above recent 1M swing high)
@@ -177,11 +183,10 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                 poi_entry = (protected_low + current_price) / 2
                 checklist["POI Formed"] = f"1M Demand @ {round(poi_entry, dec)}"
                 
-                sl_buffer = 4.0 if symbol == "NAS100" else 1.5
-                sl = protected_low - sl_buffer
+                sl = protected_low - buf
                 sl_distance = abs(poi_entry - sl)
 
-                # TP: Target opposing BSL, but cap at 1:3.0 R:R to respect Goat $1k scalping consistency
+                # TP: Target opposing BSL, capped at 1:3.0 R:R for Goat consistency
                 ideal_tp = bsl_15m
                 max_tp_dist = sl_distance * 3.0
                 if abs(ideal_tp - poi_entry) > max_tp_dist:
@@ -194,21 +199,18 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                 
                 if rr >= min_rr:
                     decision = "Buy limit"
-                    reason = f"15M SSL swept -> 1M Bullish BOS -> Valid POI Retracement with 1:{round(rr, 1)} R:R."
-                    projected_gain = round(risk_dollars * rr, 2)
-                    consistency_impact = round((projected_gain / 100.0) * 100, 1)
-                    order_ticket = {
-                        "Order Type": "BUY LIMIT",
-                        "Instrument": symbol,
-                        "Entry Price": round(poi_entry, dec),
-                        "Stop Loss": round(sl, dec),
-                        "Take Profit": round(tp, dec),
-                        "R:R": f"1:{round(rr, 2)}",
-                        "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
-                        "Projected Profit": f"+${projected_gain:.2f}",
-                        "Consistency Impact": f"{consistency_impact}% (< 15% Cap Safe)",
-                        "Cancel If": f"Price drops below Protected Low ({round(protected_low, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
-                    }
+                    reason = f"15M SSL swept -> 1M Bullish BOS -> Valid POI Retracement with 1:{round(rr, 2)} R:R."
+                    order_ticket = build_order_ticket(
+                        order_type="BUY LIMIT",
+                        symbol=symbol,
+                        entry_price=poi_entry,
+                        stop_loss=sl,
+                        take_profit=tp,
+                        account_balance=account_bal,
+                        risk_per_trade=risk_dollars,
+                        cancel_if=f"Price drops below Protected Low ({round(protected_low, dec)}) or sweeps TP ({round(tp, dec)}) before fill.",
+                        min_rr=min_rr
+                    )
 
         return {
             "strategy": self.name,

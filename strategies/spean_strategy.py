@@ -1,6 +1,7 @@
 import datetime
 from typing import Dict, Any, Optional
 from .base_strategy import BaseStrategy
+from backend.risk_engine import build_order_ticket, sl_buffer, MIN_RR, DEFAULT_ACCOUNT_BALANCE
 
 try:
     import zoneinfo
@@ -42,9 +43,7 @@ class SPEANStrategy(BaseStrategy):
         time_minutes = hour * 60 + minute
         time_str = now_utc.strftime("%H:%M UTC")
 
-        # London Q Zone: 07:00 to 10:00 UTC (420 to 600 min)
         is_london_q = (420 <= time_minutes <= 600)
-        # New York Q Zone: 13:30 to 16:30 UTC (810 to 990 min)
         is_ny_q = (810 <= time_minutes <= 990)
 
         is_active = is_london_q or is_ny_q
@@ -113,25 +112,39 @@ class SPEANStrategy(BaseStrategy):
         bias_label = "BULLISH (Upward Delivery Expected)" if is_bullish else "BEARISH (Downward Delivery Expected)"
         h1_context = "Trading in 4H Premium" if is_bullish else "Trading in 4H Discount"
 
+        # Authentic PDH / PDL from previous completed daily candle (#11)
+        if c_1d and len(c_1d) >= 2:
+            pdh = c_1d[-2]['high']
+            pdl = c_1d[-2]['low']
+        elif len(c_1h) >= 25:
+            pdh = max([c['high'] for c in c_1h[-24:-1]])
+            pdl = min([c['low'] for c in c_1h[-24:-1]])
+        else:
+            pdh = max([c['high'] for c in c_1h]) if c_1h else current_price
+            pdl = min([c['low'] for c in c_1h]) if c_1h else current_price
+
         # 3. 15M Liquidity & Inducement
         recent_15m = c_15m[-16:] if len(c_15m) >= 16 else c_15m
         bsl_15m = max([c['high'] for c in recent_15m[:-1]]) if len(recent_15m) > 1 else recent_15m[0]['high']
         ssl_15m = min([c['low'] for c in recent_15m[:-1]]) if len(recent_15m) > 1 else recent_15m[0]['low']
 
-        day_high = market_data.get("day_high", 0.0) or bsl_15m
-        day_low = market_data.get("day_low", 0.0) or ssl_15m
-
-        # Inducement on 15M: Intermediate swing bait
-        inducement_15m = (bsl_15m + ssl_15m) / 2
+        # Explicitly distinguish Today's Session Extreme from PDH/PDL (#14 fix)
+        session_high = market_data.get("day_high", 0.0)
+        session_low = market_data.get("day_low", 0.0)
 
         # 4. Liquidity Taken (Visible interaction / sweep on 15M / 1M)
         recent_1m_high = max([c['high'] for c in c_1m[-12:]])
         recent_1m_low = min([c['low'] for c in c_1m[-12:]])
 
-        bsl_taken = (recent_1m_high >= bsl_15m) or (recent_1m_high >= day_high)
-        ssl_taken = (recent_1m_low <= ssl_15m) or (recent_1m_low <= day_low)
-        liquidity_taken = bsl_taken or ssl_taken
+        # Sweep of 15M structural pool or prior day level
+        bsl_taken = (recent_1m_high >= bsl_15m) or (recent_1m_high >= pdh)
+        ssl_taken = (recent_1m_low <= ssl_15m) or (recent_1m_low <= pdl)
 
+        # Track session extreme sweep separately
+        swept_session_high = session_high > 0 and recent_1m_high >= session_high
+        swept_session_low = session_low > 0 and recent_1m_low <= session_low
+
+        liquidity_taken = bsl_taken or ssl_taken
         liq_status = "CONFIRMED: LIQUIDITY TAKEN" if liquidity_taken else "WAITING FOR LIQUIDITY TAKE"
 
         # 5. 1M Execution Structure: Control, Buildup, Inducement, BOS
@@ -147,46 +160,38 @@ class SPEANStrategy(BaseStrategy):
         if liquidity_taken and len(m1_candles) >= 6:
             if ssl_taken and is_bullish:
                 # Long Setup Model:
-                # Protected Level: Protected Low that swept SSL
                 protected_level = min([c['low'] for c in m1_candles[-8:]])
                 has_control = current_price > protected_level
                 has_buildup = len(m1_candles) >= 5
 
-                # 1M BOS: Meaningful candle body close above recent swing high
+                # 1M BOS: candle body close above recent swing high
                 swing_highs = [
                     m1_candles[i]['high'] for i in range(1, len(m1_candles) - 2)
                     if m1_candles[i]['high'] > m1_candles[i-1]['high'] and m1_candles[i]['high'] > m1_candles[i+1]['high']
                 ]
                 if swing_highs and current_price > swing_highs[-1]:
                     has_bos = True
-                    # Quality POI: 1M Bullish Order Block / Demand zone
                     poi_low = protected_level
                     poi_high = (protected_level + swing_highs[-1]) / 2
                     poi_zone = f"1M Demand [{round(poi_low, dec)} - {round(poi_high, dec)}]"
-                    
-                    # Mitigation: Price pulled back into the POI
                     is_mitigated = (recent_1m_low <= poi_high)
 
             elif bsl_taken and not is_bullish:
                 # Short Setup Model:
-                # Protected Level: Protected High that swept BSL
                 protected_level = max([c['high'] for c in m1_candles[-8:]])
                 has_control = current_price < protected_level
                 has_buildup = len(m1_candles) >= 5
 
-                # 1M BOS: Meaningful candle body close below recent swing low
+                # 1M BOS: candle body close below recent swing low
                 swing_lows = [
                     m1_candles[i]['low'] for i in range(1, len(m1_candles) - 2)
                     if m1_candles[i]['low'] < m1_candles[i-1]['low'] and m1_candles[i]['low'] < m1_candles[i+1]['low']
                 ]
                 if swing_lows and current_price < swing_lows[-1]:
                     has_bos = True
-                    # Quality POI: 1M Bearish Order Block / Supply zone
                     poi_high = protected_level
                     poi_low = (protected_level + swing_lows[-1]) / 2
                     poi_zone = f"1M Supply [{round(poi_low, dec)} - {round(poi_high, dec)}]"
-                    
-                    # Mitigation: Price pulled back into the POI
                     is_mitigated = (recent_1m_high >= poi_low)
 
         # 6. FAH 7-Layer Confirmation Layer
@@ -202,10 +207,20 @@ class SPEANStrategy(BaseStrategy):
         passed_count = sum(1 for _, ok in fah_checks if ok)
         fah_str = f"{passed_count}/7 Checks Aligned"
 
+        session_extreme_label = "None"
+        if swept_session_high:
+            session_extreme_label = f"Swept Today's High ({round(session_high, dec)})"
+        elif swept_session_low:
+            session_extreme_label = f"Swept Today's Low ({round(session_low, dec)})"
+        elif session_high > 0:
+            session_extreme_label = f"High: {round(session_high, dec)} | Low: {round(session_low, dec)}"
+
         checklist = {
             "Q ZONE": q_info["label"],
             "4H BIAS & CONTEXT": f"{bias_label} | {h1_context}",
             "15M LIQUIDITY": f"BSL: {round(bsl_15m, dec)} | SSL: {round(ssl_15m, dec)}",
+            "PRIOR DAY LEVELS": f"PDH: {round(pdh, dec)} | PDL: {round(pdl, dec)}",
+            "TODAY'S SESSION EXTREME": session_extreme_label,
             "LIQUIDITY STATUS": liq_status,
             "1M CONTROL & BUILDUP": "CONFIRMED (Buyers in Control)" if (has_control and is_bullish) else ("CONFIRMED (Sellers in Control)" if (has_control and not is_bullish) else "WAITING"),
             "1M BOS & INDUCEMENT": "CONFIRMED (Valid Directional BOS)" if has_bos else "WAITING FOR BOS",
@@ -234,75 +249,68 @@ class SPEANStrategy(BaseStrategy):
                 "order_ticket": None
             }
 
-        # Sequence Complete: Authorize Entry
+        # Sequence Complete: Authorize Entry with standardized risk engine (#9, #15)
         risk_dollars = account_config.get("risk_per_trade", 2.50)
-        min_rr = account_config.get("min_rr", 1.8)
+        account_bal = account_config.get("balance", DEFAULT_ACCOUNT_BALANCE)
+        min_rr = account_config.get("min_rr", MIN_RR)
+        buf = sl_buffer(symbol)
 
-        sl_buffer = 3.5 if symbol == "NAS100" else 1.2
+        order_ticket = None
+        decision = "Wait / No trade"
+        reason = "Awaiting qualifying R:R."
 
         if is_bullish and ssl_taken:
             entry = current_price
-            sl = round(protected_level - sl_buffer, dec)
+            sl = round(protected_level - buf, dec)
             tp = round(bsl_15m, dec)
             sl_dist = abs(entry - sl)
             tp_dist = abs(tp - entry)
             rr = tp_dist / sl_dist if sl_dist > 0 else 0
 
             if rr >= min_rr:
-                projected_gain = round(risk_dollars * rr, 2)
-                ticket = {
-                    "Order Type": "BUY LIMIT",
-                    "Instrument": symbol,
-                    "Entry Price": round(entry, dec),
-                    "Stop Loss": round(sl, dec),
-                    "Take Profit": round(tp, dec),
-                    "R:R": f"1:{round(rr, 2)}",
-                    "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
-                    "Projected Profit": f"+${projected_gain:.2f}",
-                    "Consistency Impact": f"{round((projected_gain / 100.0) * 100, 1)}% (< 15% Cap Safe)",
-                    "Cancel If": f"Price drops below Protected Low ({round(sl, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
-                }
-                return {
-                    "strategy": self.name,
-                    "decision": "Buy limit",
-                    "reason": f"SPEAN Long sequence complete: Q-Zone active -> 15M SSL swept -> 1M BOS + POI mitigated -> R:R 1:{round(rr, 2)} to BSL ({tp}).",
-                    "checklist": checklist,
-                    "order_ticket": ticket
-                }
-        elif not is_bullish and bsl_taken:
+                decision = "Buy limit"
+                reason = f"SPEAN Long Setup Confirmed ({fah_str}). SSL taken -> Protected Low held -> 1M BOS -> POI Mitigated. 1:{round(rr, 2)} R:R."
+                order_ticket = build_order_ticket(
+                    order_type="BUY LIMIT",
+                    symbol=symbol,
+                    entry_price=entry,
+                    stop_loss=sl,
+                    take_profit=tp,
+                    account_balance=account_bal,
+                    risk_per_trade=risk_dollars,
+                    cancel_if=f"Price closes candle body below Protected Low ({round(sl, dec)}) or sweeps BSL ({round(tp, dec)}) before fill.",
+                    min_rr=min_rr,
+                    extra_fields={"FAH Confluence": fah_str}
+                )
+
+        elif (not is_bullish) and bsl_taken:
             entry = current_price
-            sl = round(protected_level + sl_buffer, dec)
+            sl = round(protected_level + buf, dec)
             tp = round(ssl_15m, dec)
             sl_dist = abs(sl - entry)
             tp_dist = abs(entry - tp)
             rr = tp_dist / sl_dist if sl_dist > 0 else 0
 
             if rr >= min_rr:
-                projected_gain = round(risk_dollars * rr, 2)
-                ticket = {
-                    "Order Type": "SELL LIMIT",
-                    "Instrument": symbol,
-                    "Entry Price": round(entry, dec),
-                    "Stop Loss": round(sl, dec),
-                    "Take Profit": round(tp, dec),
-                    "R:R": f"1:{round(rr, 2)}",
-                    "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
-                    "Projected Profit": f"+${projected_gain:.2f}",
-                    "Consistency Impact": f"{round((projected_gain / 100.0) * 100, 1)}% (< 15% Cap Safe)",
-                    "Cancel If": f"Price breaks above Protected High ({round(sl, dec)}) or sweeps TP ({round(tp, dec)}) before fill."
-                }
-                return {
-                    "strategy": self.name,
-                    "decision": "Sell limit",
-                    "reason": f"SPEAN Short sequence complete: Q-Zone active -> 15M BSL swept -> 1M BOS + POI mitigated -> R:R 1:{round(rr, 2)} to SSL ({tp}).",
-                    "checklist": checklist,
-                    "order_ticket": ticket
-                }
+                decision = "Sell limit"
+                reason = f"SPEAN Short Setup Confirmed ({fah_str}). BSL taken -> Protected High held -> 1M BOS -> POI Mitigated. 1:{round(rr, 2)} R:R."
+                order_ticket = build_order_ticket(
+                    order_type="SELL LIMIT",
+                    symbol=symbol,
+                    entry_price=entry,
+                    stop_loss=sl,
+                    take_profit=tp,
+                    account_balance=account_bal,
+                    risk_per_trade=risk_dollars,
+                    cancel_if=f"Price closes candle body above Protected High ({round(sl, dec)}) or sweeps SSL ({round(tp, dec)}) before fill.",
+                    min_rr=min_rr,
+                    extra_fields={"FAH Confluence": fah_str}
+                )
 
         return {
             "strategy": self.name,
-            "decision": "Wait / No trade",
-            "reason": "SPEAN sequence forming, waiting for minimum 1:2 R:R to opposing liquidity pool.",
+            "decision": decision,
+            "reason": reason,
             "checklist": checklist,
-            "order_ticket": None
+            "order_ticket": order_ticket
         }

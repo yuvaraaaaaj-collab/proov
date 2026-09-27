@@ -2,6 +2,8 @@ import datetime
 import math
 from typing import Dict, Any, Optional, List
 from .base_strategy import BaseStrategy
+from backend.risk_engine import build_order_ticket, sl_buffer, MIN_RR, DEFAULT_ACCOUNT_BALANCE
+from backend.smt_engine import check_smt_divergence, check_ssmt_divergence
 
 try:
     import zoneinfo
@@ -604,35 +606,12 @@ class PraveenStrategy(BaseStrategy):
 
         return {"ifvg": False, "level": None, "ce": None, "label": "WAITING (No Inversion Retested)"}
 
-    def _check_smt(self, c_1m_primary: list, c_1m_corr: list, is_bullish: bool) -> bool:
+    def _check_smt(self, c_1m_primary: list, c_1m_corr: list, symbol: str = "NAS100") -> Dict[str, Any]:
         """
         Step 5: SMT Divergence (Page 5).
-        NAS100 swept low but correlated did not (bullish), or vice versa.
+        Delegates to shared smt_engine using swing-point + timestamp-tolerance detection.
         """
-        if len(c_1m_primary) < 10 or len(c_1m_corr) < 10:
-            return False
-
-        p_recent = c_1m_primary[-10:]
-        c_recent = c_1m_corr[-10:]
-
-        p_low = min([c['low'] for c in p_recent[-5:]])
-        p_prev_low = min([c['low'] for c in p_recent[:5]])
-        c_low = min([c['low'] for c in c_recent[-5:]])
-        c_prev_low = min([c['low'] for c in c_recent[:5]])
-
-        p_high = max([c['high'] for c in p_recent[-5:]])
-        p_prev_high = max([c['high'] for c in p_recent[:5]])
-        c_high = max([c['high'] for c in c_recent[-5:]])
-        c_prev_high = max([c['high'] for c in c_recent[:5]])
-
-        if is_bullish:
-            p_swept = p_low < p_prev_low
-            c_swept = c_low < c_prev_low
-            return (p_swept and not c_swept) or (not p_swept and c_swept)
-        else:
-            p_swept = p_high > p_prev_high
-            c_swept = c_high > c_prev_high
-            return (p_swept and not c_swept) or (not p_swept and c_swept)
+        return check_smt_divergence(c_1m_primary, c_1m_corr, symbol=symbol)
 
     def _check_ote(self, pd_array: dict, c_30m: list) -> bool:
         """
@@ -738,27 +717,36 @@ class PraveenStrategy(BaseStrategy):
         # 8. Minimum 1:2 R:R (Page 4)
         # Entry level: C.E. of 1min IFVG / FVG
         entry_price = ifvg_info.get("ce") or ifvg_info.get("level") or current_price
-        sl_buffer = 4.0 if symbol == "NAS100" else 1.5
+        buf = sl_buffer(symbol)
+        min_rr = account_config.get("min_rr", MIN_RR)
 
         if is_bullish:
-            sl_price = round((cisd_info.get("swing_extreme") or current_price) - sl_buffer, dec)
+            sl_price = round((cisd_info.get("swing_extreme") or current_price) - buf, dec)
             sl_dist = abs(entry_price - sl_price)
             tp_price = round(entry_price + sl_dist * 2.0, dec)
             if dol_target and dol_target > tp_price:
                 tp_price = round(dol_target, dec)
         else:
-            sl_price = round((cisd_info.get("swing_extreme") or current_price) + sl_buffer, dec)
+            sl_price = round((cisd_info.get("swing_extreme") or current_price) + buf, dec)
             sl_dist = abs(sl_price - entry_price)
             tp_price = round(entry_price - sl_dist * 2.0, dec)
             if dol_target and dol_target < tp_price:
                 tp_price = round(dol_target, dec)
 
         calculated_rr = abs(tp_price - entry_price) / max(0.1, sl_dist)
-        req_8_rr_valid = (calculated_rr >= 1.8)
+        req_8_rr_valid = (calculated_rr >= (min_rr - 0.05))
 
-        # 4 BONUS Criteria (Page 5)
-        bonus_1_smt = self._check_smt(c_1m, c_corr, is_bullish)
-        bonus_2_ssmt = (bonus_1_smt and kz["is_quarter_boundary"])
+        # 4 BONUS Criteria (Page 5) - Integrated with shared smt_engine (#10)
+        c_corr_1m = market_data.get("correlated_candles_1m", [])
+        c_corr_5m = market_data.get("correlated_candles_5m", [])
+        corr_sym = market_data.get("correlated_symbol", "")
+
+        smt_eval = check_smt_divergence(c_1m, c_corr_1m, symbol=symbol, correlated_symbol=corr_sym)
+        bonus_1_smt = (smt_eval["detected"] and smt_eval.get("direction") == ("bullish" if is_bullish else "bearish"))
+
+        ssmt_eval = check_ssmt_divergence(market_data.get("candles_5m", c_1m), c_corr_5m, symbol=symbol, quarter_name=kz["quarter"], correlated_symbol=corr_sym)
+        bonus_2_ssmt = (ssmt_eval["detected"] and kz["is_quarter_boundary"] and ssmt_eval.get("direction") == ("bullish" if is_bullish else "bearish"))
+
         bonus_3_ote = self._check_ote(active_pd_array, c_30m)
         bonus_4_macro = (kz["is_silver_bullet"] or kz["is_macro"])
 
@@ -800,15 +788,14 @@ class PraveenStrategy(BaseStrategy):
             "7. 1min IFVG Confirmed": f"{'CONFIRMED' if req_7_ifvg_confirmed else 'WAITING'} ({ifvg_info['label']})",
             "8. Minimum 1:2 R:R": f"{'PASS' if req_8_rr_valid else 'FAIL'} (1:{calculated_rr:.2f} R:R Target)",
             "9. Setup Grade & Action": f"Grade {grade} [{req_count}/8 Req, {bonus_count}/4 Bonus] -> {action} ({size})",
-            "10. SMT Divergence": f"{'CONFIRMED' if bonus_1_smt else 'None'} (NAS100 vs Correlated)",
-            "11. SSMT at Quarter Boundary": f"{'CONFIRMED' if bonus_2_ssmt else 'None'} ({kz['quarter']})",
+            "10. SMT Divergence": smt_eval["label"],
+            "11. SSMT at Quarter Boundary": ssmt_eval["label"],
             "12. OTE Zone (61.8%-78.6%)": f"{'CONFIRMED' if bonus_3_ote else 'None'} (Fib OTE Sweet Spot)",
             "13. Silver Bullet / Macro Window": f"{'ACTIVE' if bonus_4_macro else 'Outside'} ({kz['phase']})",
             "14. Execution & Goat Safe": "SAFE ($2.50 Risk | 1:2+ R:R | <15% Cap)"
         }
 
         # Notification Trigger Rules (Page 6)
-        # Fire alert when ALL conditions are met: grade == "A+" or grade == "A"
         is_alert_grade = (grade in ["A+", "A"])
         decision = f"{'Buy' if is_bullish else 'Sell'} limit" if is_alert_grade else "Wait / No trade"
 
@@ -829,21 +816,18 @@ class PraveenStrategy(BaseStrategy):
         order_ticket = None
         if is_alert_grade:
             risk_dollars = account_config.get("risk_per_trade", 2.50)
-            projected_gain = round(risk_dollars * calculated_rr, 2)
-            consistency_pct = round((projected_gain / 100.0) * 100, 1)
-
-            order_ticket = {
-                "Order Type": f"{'BUY' if is_bullish else 'SELL'} LIMIT ({grade} SETUP)",
-                "Instrument": symbol,
-                "Entry Price": round(entry_price, dec),
-                "Stop Loss": round(sl_price, dec),
-                "Take Profit": round(tp_price, dec),
-                "R:R": f"1:{calculated_rr:.2f}",
-                "Risk Amount": f"${risk_dollars:.2f} (0.25%)",
-                "Projected Profit": f"+${projected_gain:.2f}",
-                "Consistency Impact": f"{consistency_pct}% (< 15% Cap Safe)",
-                "Cancel If": f"Price closes a candle body beyond the swing {'low' if is_bullish else 'high'} ({sl_price}) that created the CISD - trade is invalidated immediately."
-            }
+            account_bal = account_config.get("balance", DEFAULT_ACCOUNT_BALANCE)
+            order_ticket = build_order_ticket(
+                order_type=f"{'BUY' if is_bullish else 'SELL'} LIMIT ({grade} SETUP)",
+                symbol=symbol,
+                entry_price=entry_price,
+                stop_loss=sl_price,
+                take_profit=tp_price,
+                account_balance=account_bal,
+                risk_per_trade=risk_dollars,
+                cancel_if=f"Price closes a candle body beyond the swing {'low' if is_bullish else 'high'} ({sl_price}) that created the CISD - trade is invalidated immediately.",
+                min_rr=min_rr
+            )
 
         return {
             "strategy": self.name,

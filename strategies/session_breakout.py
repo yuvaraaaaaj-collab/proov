@@ -1,6 +1,7 @@
 import datetime
 from typing import Dict, Any
 from .base_strategy import BaseStrategy
+from backend.risk_engine import build_order_ticket, sl_buffer, MIN_RR, DEFAULT_ACCOUNT_BALANCE
 
 class SessionBreakoutStrategy(BaseStrategy):
     """
@@ -41,7 +42,7 @@ class SessionBreakoutStrategy(BaseStrategy):
             "Session Range High": round(range_high, dec),
             "Session Range Low": round(range_low, dec),
             "Breakout State": "INSIDE RANGE",
-            "Goat $1k Compliance": "SAFE ($2.50 Risk | 1:2+ R:R)"
+            "Goat $1k Compliance": f"SAFE ($2.50 Risk | 1:{MIN_RR:.1f}+ R:R)"
         }
 
         decision = "Wait / No trade"
@@ -49,7 +50,8 @@ class SessionBreakoutStrategy(BaseStrategy):
         order_ticket = None
 
         risk_dollars = account_config.get("risk_per_trade", 2.50)
-        min_rr = 2.0
+        account_bal = account_config.get("account_balance") or account_config.get("balance", DEFAULT_ACCOUNT_BALANCE)
+        buf = sl_buffer(symbol)
 
         # Breakout requires price to cleanly displace beyond range high or low
         breakout_buffer = 0.8 if is_gold else 5.0
@@ -57,54 +59,50 @@ class SessionBreakoutStrategy(BaseStrategy):
         if current_price > (range_high + breakout_buffer):
             checklist["Breakout State"] = "BULLISH BREAKOUT"
             entry = current_price
-            sl = round(range_high - (1.0 if is_gold else 6.0), dec)
+            sl = round(range_high - buf, dec)
             risk_dist = abs(entry - sl)
-            # Target 1:2 R:R
-            tp = round(entry + (risk_dist * 2.0), dec)
+            # Target standardized MIN_RR
+            tp = round(entry + (risk_dist * MIN_RR), dec)
             reward_dist = abs(tp - entry)
             rr = reward_dist / risk_dist if risk_dist > 0 else 0
             
-            if rr >= min_rr:
+            if rr >= MIN_RR:
                 decision = "Buy stop / Market"
                 reason = f"Confirmed momentum expansion above session high ({round(range_high, dec)})."
-                proj_profit = round(risk_dollars * rr, 2)
-                order_ticket = {
-                    "Order Type": "BUY STOP / MARKET",
-                    "Instrument": symbol,
-                    "Entry Price": round(entry, dec),
-                    "Stop Loss": round(sl, dec),
-                    "Take Profit": round(tp, dec),
-                    "R:R": f"1:{round(rr, 2)}",
-                    "Risk Amount": f"${risk_dollars:.2f} (Goat Safe)",
-                    "Projected Profit": f"+${proj_profit:.2f}",
-                    "Consistency Impact": f"{round((proj_profit / 100.0) * 100, 1)}% (< 15% Cap Safe)",
-                    "Cancel If": f"Price retreats back inside session range ({round(range_high, dec)})."
-                }
+                order_ticket = build_order_ticket(
+                    direction="BUY",
+                    symbol=symbol,
+                    entry=entry,
+                    stop_loss=sl,
+                    take_profit=tp,
+                    risk_dollars=risk_dollars,
+                    account_balance=account_bal,
+                    order_type="BUY STOP / MARKET",
+                    cancel_condition=f"Price retreats back inside session range ({round(range_high, dec)})."
+                )
         elif current_price < (range_low - breakout_buffer):
             checklist["Breakout State"] = "BEARISH BREAKOUT"
             entry = current_price
-            sl = round(range_low + (1.0 if is_gold else 6.0), dec)
+            sl = round(range_low + buf, dec)
             risk_dist = abs(sl - entry)
-            tp = round(entry - (risk_dist * 2.0), dec)
+            tp = round(entry - (risk_dist * MIN_RR), dec)
             reward_dist = abs(entry - tp)
             rr = reward_dist / risk_dist if risk_dist > 0 else 0
             
-            if rr >= min_rr:
+            if rr >= MIN_RR:
                 decision = "Sell stop / Market"
                 reason = f"Confirmed momentum expansion below session low ({round(range_low, dec)})."
-                proj_profit = round(risk_dollars * rr, 2)
-                order_ticket = {
-                    "Order Type": "SELL STOP / MARKET",
-                    "Instrument": symbol,
-                    "Entry Price": round(entry, dec),
-                    "Stop Loss": round(sl, dec),
-                    "Take Profit": round(tp, dec),
-                    "R:R": f"1:{round(rr, 2)}",
-                    "Risk Amount": f"${risk_dollars:.2f} (Goat Safe)",
-                    "Projected Profit": f"+${proj_profit:.2f}",
-                    "Consistency Impact": f"{round((proj_profit / 100.0) * 100, 1)}% (< 15% Cap Safe)",
-                    "Cancel If": f"Price retreats back inside session range ({round(range_low, dec)})."
-                }
+                order_ticket = build_order_ticket(
+                    direction="SELL",
+                    symbol=symbol,
+                    entry=entry,
+                    stop_loss=sl,
+                    take_profit=tp,
+                    risk_dollars=risk_dollars,
+                    account_balance=account_bal,
+                    order_type="SELL STOP / MARKET",
+                    cancel_condition=f"Price retreats back inside session range ({round(range_low, dec)})."
+                )
 
         return {
             "strategy": self.name,
