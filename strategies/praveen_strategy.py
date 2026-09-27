@@ -717,7 +717,7 @@ class PraveenStrategy(BaseStrategy):
             "9. Setup Grade & Action": f"Grade {grade} [{req_count}/8 Req, {bonus_count}/4 Bonus] -> {action} ({size})",
             "10. SMT Divergence": f"{'CONFIRMED' if bonus_1_smt else 'None'} (NAS100 vs Correlated)",
             "11. SSMT at Quarter Boundary": f"{'CONFIRMED' if bonus_2_ssmt else 'None'} ({kz['quarter']})",
-            "12. OTE Zone (61.8%–78.6%)": f"{'CONFIRMED' if bonus_3_ote else 'None'} (Fib OTE Sweet Spot)",
+            "12. OTE Zone (61.8%-78.6%)": f"{'CONFIRMED' if bonus_3_ote else 'None'} (Fib OTE Sweet Spot)",
             "13. Silver Bullet / Macro Window": f"{'ACTIVE' if bonus_4_macro else 'Outside'} ({kz['phase']})",
             "14. Execution & Goat Safe": "SAFE ($2.50 Risk | 1:2+ R:R | <15% Cap)"
         }
