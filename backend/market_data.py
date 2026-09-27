@@ -67,8 +67,9 @@ class MarketDataProvider:
             cache_key_1m = f"{symbol_key}_1m"
             last_1m_fetch = self._last_fetch.get(cache_key_1m, 0)
             if force_fresh or cache_key_1m not in self._cache or (now - last_1m_fetch) > 30:
-                fresh_1m = self.fetch_ohlcv(ticker, "1m", "1d")
+                fresh_1m = self.fetch_ohlcv(ticker, "1m", "5d")
                 if fresh_1m and len(fresh_1m) > 0:
+                    fresh_1m = fresh_1m[-300:]
                     self._cache[cache_key_1m] = fresh_1m
                     self._last_fetch[cache_key_1m] = now
                     c_1m = [dict(c) for c in fresh_1m]
@@ -78,17 +79,27 @@ class MarketDataProvider:
                 c_1m = [dict(c) for c in self._cache.get(cache_key_1m, [])]
             current_price = tv_price if tv_price > 0 else (c_1m[-1]['close'] if c_1m else 0.0)
 
-        # 2. HTF (15m, 30m, 1h) cached for 300s (5 minutes) so it never delays the live scanner
+        # 2. HTF (15m, 30m, 1h, 4h, 1d, 1wk) cached for 300s (5 minutes) so it never delays the live scanner
         cache_key = f"{symbol_key}_htf"
         if force_fresh or cache_key not in self._cache or (now - self._last_fetch.get(cache_key, 0)) > 300:
             c_15m = self.fetch_ohlcv(ticker, "15m", "5d")
             c_30m = self.fetch_ohlcv(ticker, "30m", "5d")
             c_1h = self.fetch_ohlcv(ticker, "1h", "1mo")
+            c_4h = self.fetch_ohlcv(ticker, "4h", "1mo")
+            c_1d = self.fetch_ohlcv(ticker, "1d", "3mo")
+            c_1w = self.fetch_ohlcv(ticker, "1wk", "1y")
             if c_15m and c_1h:
-                self._cache[cache_key] = {"c_15m": c_15m, "c_30m": c_30m or [], "c_1h": c_1h}
+                self._cache[cache_key] = {
+                    "c_15m": c_15m or [],
+                    "c_30m": c_30m or [],
+                    "c_1h": c_1h or [],
+                    "c_4h": c_4h or [],
+                    "c_1d": c_1d or [],
+                    "c_1w": c_1w or []
+                }
                 self._last_fetch[cache_key] = now
         
-        htf = self._cache.get(cache_key, {"c_15m": [], "c_30m": [], "c_1h": []})
+        htf = self._cache.get(cache_key, {"c_15m": [], "c_30m": [], "c_1h": [], "c_4h": [], "c_1d": [], "c_1w": []})
         
         # 3. Check for webhook override
         if symbol_key in self._cache.get("overrides", {}):
@@ -100,50 +111,36 @@ class MarketDataProvider:
                     broker_offset = current_price - c_1m[-1]['close']
                     self._cache[f"{symbol_key}_offset"] = broker_offset
 
+        def _calib(candles):
+            if not candles or broker_offset == 0.0:
+                return [dict(c) for c in (candles or [])]
+            return [
+                {
+                    **c,
+                    "open": round(c["open"] + broker_offset, decimals),
+                    "high": round(c["high"] + broker_offset, decimals),
+                    "low": round(c["low"] + broker_offset, decimals),
+                    "close": round(c["close"] + broker_offset, decimals),
+                }
+                for c in candles
+            ]
+
         # Calibrate candle levels with broker offset if needed
         if broker_offset != 0.0:
             if not tv_candles:
-                calibrated_1m = []
-                for c in c_1m:
-                    calibrated_1m.append({
-                        **c,
-                        "open": round(c["open"] + broker_offset, decimals),
-                        "high": round(c["high"] + broker_offset, decimals),
-                        "low": round(c["low"] + broker_offset, decimals),
-                        "close": round(c["close"] + broker_offset, decimals),
-                    })
-                c_1m = calibrated_1m
-                c_1m[-1]['close'] = current_price
-                c_1m[-1]['high'] = max(c_1m[-1]['high'], current_price)
-                c_1m[-1]['low'] = min(c_1m[-1]['low'], current_price)
-            calibrated_15m = []
-            for c in htf.get("c_15m", []):
-                calibrated_15m.append({
-                    **c,
-                    "open": round(c["open"] + broker_offset, decimals),
-                    "high": round(c["high"] + broker_offset, decimals),
-                    "low": round(c["low"] + broker_offset, decimals),
-                    "close": round(c["close"] + broker_offset, decimals),
-                })
-            calibrated_30m = []
-            for c in htf.get("c_30m", []):
-                calibrated_30m.append({
-                    **c,
-                    "open": round(c["open"] + broker_offset, decimals),
-                    "high": round(c["high"] + broker_offset, decimals),
-                    "low": round(c["low"] + broker_offset, decimals),
-                    "close": round(c["close"] + broker_offset, decimals),
-                })
-            calibrated_1h = []
-            for c in htf.get("c_1h", []):
-                calibrated_1h.append({
-                    **c,
-                    "open": round(c["open"] + broker_offset, decimals),
-                    "high": round(c["high"] + broker_offset, decimals),
-                    "low": round(c["low"] + broker_offset, decimals),
-                    "close": round(c["close"] + broker_offset, decimals),
-                })
-            htf = {"c_15m": calibrated_15m, "c_30m": calibrated_30m, "c_1h": calibrated_1h}
+                c_1m = _calib(c_1m)
+                if c_1m:
+                    c_1m[-1]['close'] = current_price
+                    c_1m[-1]['high'] = max(c_1m[-1]['high'], current_price)
+                    c_1m[-1]['low'] = min(c_1m[-1]['low'], current_price)
+            htf = {
+                "c_15m": _calib(htf.get("c_15m", [])),
+                "c_30m": _calib(htf.get("c_30m", [])),
+                "c_1h": _calib(htf.get("c_1h", [])),
+                "c_4h": _calib(htf.get("c_4h", [])),
+                "c_1d": _calib(htf.get("c_1d", [])),
+                "c_1w": _calib(htf.get("c_1w", []))
+            }
         else:
             if c_1m:
                 c_1m[-1]['close'] = current_price
@@ -163,6 +160,9 @@ class MarketDataProvider:
             "candles_15m": htf.get("c_15m", []),
             "candles_30m": htf.get("c_30m", []),
             "candles_1h": htf.get("c_1h", []),
+            "candles_4h": htf.get("c_4h", []),
+            "candles_1d": htf.get("c_1d", []),
+            "candles_1w": htf.get("c_1w", []),
             "correlated_symbol": correlated_sym,
             "correlated_candles_1m": corr_candles or [],
             "timestamp": now

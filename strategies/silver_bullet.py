@@ -88,6 +88,7 @@ class ICTSilverBulletStrategy(BaseStrategy):
         c_1m = market_data.get("candles_1m", [])
         c_15m = market_data.get("candles_15m", [])
         c_1h = market_data.get("candles_1h", [])
+        c_1d = market_data.get("candles_1d", [])
         symbol = market_data.get("symbol_name", "NAS100")
         current_price = market_data.get("current_price", 0.0)
 
@@ -103,13 +104,20 @@ class ICTSilverBulletStrategy(BaseStrategy):
         # 1. Silver Bullet 60-Minute Time Window Check
         window_info = self._get_ny_window()
         
-        # 2. Draw on Liquidity (DOL) Mapping (15M / 1H Swings)
+        # 2. Draw on Liquidity (DOL) Mapping (15M / 1H Swings & Authentic Daily PDH/PDL)
         recent_15m = c_15m[-16:] if len(c_15m) >= 16 else c_15m
         bsl_15m = max([c['high'] for c in recent_15m[:-1]])
         ssl_15m = min([c['low'] for c in recent_15m[:-1]])
 
-        pdh = max([c['high'] for c in c_1h[-24:-1]]) if len(c_1h) >= 25 else max([c['high'] for c in c_1h])
-        pdl = min([c['low'] for c in c_1h[-24:-1]]) if len(c_1h) >= 25 else min([c['low'] for c in c_1h])
+        if c_1d and len(c_1d) >= 2:
+            pdh = c_1d[-2]['high']
+            pdl = c_1d[-2]['low']
+        elif len(c_1h) >= 25:
+            pdh = max([c['high'] for c in c_1h[-24:-1]])
+            pdl = min([c['low'] for c in c_1h[-24:-1]])
+        else:
+            pdh = max([c['high'] for c in c_1h]) if c_1h else current_price
+            pdl = min([c['low'] for c in c_1h]) if c_1h else current_price
 
         # Align with TradingView Day High and Low for exact chart match
         day_high = market_data.get("day_high", 0.0)

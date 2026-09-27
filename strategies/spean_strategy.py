@@ -76,6 +76,8 @@ class SPEANStrategy(BaseStrategy):
         c_1m = market_data.get("candles_1m", [])
         c_15m = market_data.get("candles_15m", [])
         c_1h = market_data.get("candles_1h", [])
+        c_4h = market_data.get("candles_4h", [])
+        c_1d = market_data.get("candles_1d", [])
         symbol = market_data.get("symbol_name", "NAS100")
         current_price = market_data.get("current_price", 0.0)
 
@@ -93,10 +95,18 @@ class SPEANStrategy(BaseStrategy):
         # 1. Q Zone Filter (London / New York)
         q_info = self._get_q_zone_status()
 
-        # 2. 4H Directional Bias & 1H Context
-        h4_lookback = min(len(c_1h), 120) if c_1h else 24
-        h4_high = max([c['high'] for c in c_1h[-h4_lookback:]]) if c_1h else current_price
-        h4_low = min([c['low'] for c in c_1h[-h4_lookback:]]) if c_1h else current_price
+        # 2. Authentic 4H Directional Bias & Context
+        if c_4h and len(c_4h) >= 6:
+            recent_4h = c_4h[-30:]  # 5 days of authentic 4H candles
+            h4_high = max([c['high'] for c in recent_4h])
+            h4_low = min([c['low'] for c in recent_4h])
+        elif c_1h:
+            h4_lookback = min(len(c_1h), 120)
+            h4_high = max([c['high'] for c in c_1h[-h4_lookback:]])
+            h4_low = min([c['low'] for c in c_1h[-h4_lookback:]])
+        else:
+            h4_high = current_price
+            h4_low = current_price
         h4_mid = (h4_high + h4_low) / 2
 
         is_bullish = current_price > h4_mid

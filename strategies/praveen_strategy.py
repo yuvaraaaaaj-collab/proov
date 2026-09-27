@@ -115,9 +115,19 @@ class PraveenStrategy(BaseStrategy):
             "time_est": time_est_str
         }
 
-    def _determine_htf_bias(self, c_1h: list, current_price: float, midnight_open: Optional[float]) -> Dict[str, Any]:
+    def _determine_htf_bias(
+        self,
+        c_1w: list,
+        c_1d: list,
+        c_4h: list,
+        c_1h: list,
+        current_price: float,
+        midnight_open: Optional[float]
+    ) -> Dict[str, Any]:
         """
         Step 1: BIAS — Higher Timeframe Direction (Page 2).
+        Top-down analysis on authentic timeframe candles:
+        Weekly (c_1w) -> Daily (c_1d) -> 4H (c_4h) -> 1H (c_1h)
         Pseudo-code:
           if (D_swing_high > prev_D_swing_high && D_swing_low > prev_D_swing_low) bias = "BULLISH"
           else if (D_swing_high < prev_D_swing_high && D_swing_low < prev_D_swing_low) bias = "BEARISH"
@@ -126,55 +136,108 @@ class PraveenStrategy(BaseStrategy):
           Bullish = price attempting to reclaim/hold above midnight open
           Bearish = price failing to hold/below midnight open
         """
-        if len(c_1h) < 12:
+        if not c_1d and not c_4h and not c_1h:
             return {"bias": "NO_TRADE", "is_bullish": False, "is_bearish": False, "label": "NO_TRADE (Insufficient HTF data)"}
 
-        # Look at 24h - 48h swing highs and lows on 1H (emulating Daily/4H structure)
-        recent_1h = c_1h[-48:] if len(c_1h) >= 48 else c_1h
-        swing_highs = [recent_1h[i]['high'] for i in range(1, len(recent_1h) - 1) if recent_1h[i]['high'] >= recent_1h[i-1]['high'] and recent_1h[i]['high'] >= recent_1h[i+1]['high']]
-        swing_lows = [recent_1h[i]['low'] for i in range(1, len(recent_1h) - 1) if recent_1h[i]['low'] <= recent_1h[i-1]['low'] and recent_1h[i]['low'] <= recent_1h[i+1]['low']]
+        # 1. Authentic Daily Structure (HH/HL vs LH/LL)
+        d_bullish = False
+        d_bearish = False
+        if len(c_1d) >= 3:
+            d_highs = [
+                c_1d[i]['high'] for i in range(1, len(c_1d) - 1)
+                if c_1d[i]['high'] >= c_1d[i-1]['high'] and c_1d[i]['high'] >= c_1d[i+1]['high']
+            ]
+            d_lows = [
+                c_1d[i]['low'] for i in range(1, len(c_1d) - 1)
+                if c_1d[i]['low'] <= c_1d[i-1]['low'] and c_1d[i]['low'] <= c_1d[i+1]['low']
+            ]
+            if len(d_highs) >= 2 and len(d_lows) >= 2:
+                if d_highs[-1] > d_highs[-2] and d_lows[-1] > d_lows[-2]:
+                    d_bullish = True
+                elif d_highs[-1] < d_highs[-2] and d_lows[-1] < d_lows[-2]:
+                    d_bearish = True
+            if not d_bullish and not d_bearish:
+                d_bullish = c_1d[-1]['close'] > c_1d[-2]['close']
+                d_bearish = c_1d[-1]['close'] < c_1d[-2]['close']
+        elif len(c_1d) >= 2:
+            d_bullish = c_1d[-1]['close'] > c_1d[-2]['close']
+            d_bearish = c_1d[-1]['close'] < c_1d[-2]['close']
 
-        # 24h extreme high and low
-        high_24h = max([c['high'] for c in recent_1h[-24:]])
-        low_24h = min([c['low'] for c in recent_1h[-24:]])
-        range_mid = (high_24h + low_24h) / 2
+        # 2. Authentic 4H Structure (HH/HL vs LH/LL)
+        h4_bullish = False
+        h4_bearish = False
+        if len(c_4h) >= 3:
+            h4_highs = [
+                c_4h[i]['high'] for i in range(1, len(c_4h) - 1)
+                if c_4h[i]['high'] >= c_4h[i-1]['high'] and c_4h[i]['high'] >= c_4h[i+1]['high']
+            ]
+            h4_lows = [
+                c_4h[i]['low'] for i in range(1, len(c_4h) - 1)
+                if c_4h[i]['low'] <= c_4h[i-1]['low'] and c_4h[i]['low'] <= c_4h[i+1]['low']
+            ]
+            if len(h4_highs) >= 2 and len(h4_lows) >= 2:
+                if h4_highs[-1] > h4_highs[-2] and h4_lows[-1] > h4_lows[-2]:
+                    h4_bullish = True
+                elif h4_highs[-1] < h4_highs[-2] and h4_lows[-1] < h4_lows[-2]:
+                    h4_bearish = True
+            if not h4_bullish and not h4_bearish:
+                h4_bullish = c_4h[-1]['close'] > c_4h[-2]['close']
+                h4_bearish = c_4h[-1]['close'] < c_4h[-2]['close']
+        elif len(c_4h) >= 2:
+            h4_bullish = c_4h[-1]['close'] > c_4h[-2]['close']
+            h4_bearish = c_4h[-1]['close'] < c_4h[-2]['close']
 
-        # 20-period 1H trend
-        ema_len = min(20, len(c_1h))
-        alpha = 2 / (ema_len + 1)
-        ema_1h = c_1h[-ema_len]['close']
-        for c in c_1h[-ema_len:]:
-            ema_1h = alpha * c['close'] + (1 - alpha) * ema_1h
+        # 3. Weekly Macro Context
+        w_bullish = False
+        w_bearish = False
+        if len(c_1w) >= 2:
+            w_mid = (c_1w[-2]['high'] + c_1w[-2]['low']) / 2
+            w_bullish = current_price >= w_mid
+            w_bearish = current_price < w_mid
 
+        # 4. Synthesize Bias across authentic D + 4H timeframe structure
         is_bullish = False
         is_bearish = False
+        structure_note = ""
 
-        if len(swing_highs) >= 2 and len(swing_lows) >= 2:
-            if swing_highs[-1] > swing_highs[-2] and swing_lows[-1] > swing_lows[-2]:
-                is_bullish = True
-            elif swing_highs[-1] < swing_highs[-2] and swing_lows[-1] < swing_lows[-2]:
-                is_bearish = True
-
-        if not is_bullish and not is_bearish:
-            # Fallback to 1H EMA + 24h Range Midpoint
-            if current_price >= range_mid and current_price >= ema_1h:
-                is_bullish = True
-            elif current_price < range_mid and current_price < ema_1h:
-                is_bearish = True
+        if d_bullish and h4_bullish:
+            is_bullish = True
+            structure_note = "Authentic Daily & 4H Bullish (HH/HL)"
+        elif d_bearish and h4_bearish:
+            is_bearish = True
+            structure_note = "Authentic Daily & 4H Bearish (LH/LL)"
+        elif h4_bullish and not d_bearish:
+            is_bullish = True
+            structure_note = "Authentic 4H Bullish Flow (HH/HL)"
+        elif h4_bearish and not d_bullish:
+            is_bearish = True
+            structure_note = "Authentic 4H Bearish Flow (LH/LL)"
+        elif d_bullish:
+            is_bullish = True
+            structure_note = "Authentic Daily Bullish (HH/HL)"
+        elif d_bearish:
+            is_bearish = True
+            structure_note = "Authentic Daily Bearish (LH/LL)"
+        elif w_bullish:
+            is_bullish = True
+            structure_note = "Authentic Weekly Premium Flow"
+        elif w_bearish:
+            is_bearish = True
+            structure_note = "Authentic Weekly Discount Flow"
 
         # Midnight open validation (Page 2)
         if midnight_open and midnight_open > 0:
             if is_bullish and current_price < midnight_open * 0.985:
-                is_bullish = False  # Failed to reclaim midnight open
+                is_bullish = False  # Failed to hold above midnight open
             elif is_bearish and current_price > midnight_open * 1.015:
                 is_bearish = False  # Broke too far above midnight open
 
         if is_bullish:
             bias_str = "BULLISH"
-            label = "BULLISH (HH/HL D/4H Structure & Reclaiming Midnight Open)"
+            label = f"BULLISH ({structure_note} & Reclaiming Midnight Open)"
         elif is_bearish:
             bias_str = "BEARISH"
-            label = "BEARISH (LH/LL D/4H Structure & Failing to Hold Midnight Open)"
+            label = f"BEARISH ({structure_note} & Failing to Hold Midnight Open)"
         else:
             bias_str = "NO_TRADE"
             label = "NO_TRADE (Unclear D/4H Structure - Standing Aside)"
@@ -184,47 +247,77 @@ class PraveenStrategy(BaseStrategy):
             "is_bullish": is_bullish,
             "is_bearish": is_bearish,
             "label": label,
-            "high_24h": high_24h,
-            "low_24h": low_24h,
-            "range_mid": range_mid,
-            "swing_highs": swing_highs,
-            "swing_lows": swing_lows
+            "d_bullish": d_bullish,
+            "d_bearish": d_bearish,
+            "h4_bullish": h4_bullish,
+            "h4_bearish": h4_bearish
         }
 
-    def _determine_dol(self, is_bullish: bool, is_bearish: bool, current_price: float, c_1h: list, dec: int) -> Dict[str, Any]:
+    def _determine_dol(
+        self,
+        is_bullish: bool,
+        is_bearish: bool,
+        current_price: float,
+        c_1w: list,
+        c_1d: list,
+        c_4h: list,
+        c_1h: list,
+        dec: int
+    ) -> Dict[str, Any]:
         """
         Step 2: DOL — Draw on Liquidity (Target Identification) (Page 2).
         Bullish DOL = nearest un-swept BSL / EQH / PDH / PWH above price.
         Bearish DOL = nearest un-swept SSL / EQL / PDL / PWL below price.
+        Directly checks authentic exchange timeframe candles:
+        - PDH / PDL from authentic Daily candles (c_1d)
+        - PWH / PWL from authentic Weekly candles (c_1w)
+        - EQH / EQL from authentic 4H & 1H swing points
+        - BSL / SSL from authentic 4H & 1H liquidity pools
         """
-        if not c_1h:
+        if not c_1h and not c_1d:
             return {"dol": None, "type": "NONE", "label": "No DOL Identified"}
 
-        recent = c_1h[-48:] if len(c_1h) >= 48 else c_1h
-        highs = [c['high'] for c in recent]
-        lows = [c['low'] for c in recent]
+        # Authentic PDH / PDL from Daily candles
+        if len(c_1d) >= 2:
+            pdh = c_1d[-2]['high']
+            pdl = c_1d[-2]['low']
+        else:
+            pdh = max([c['high'] for c in c_1h[-24:]]) if len(c_1h) >= 24 else current_price
+            pdl = min([c['low'] for c in c_1h[-24:]]) if len(c_1h) >= 24 else current_price
 
-        pdh = max(highs[-24:]) if len(highs) >= 24 else max(highs)
-        pdl = min(lows[-24:]) if len(lows) >= 24 else min(lows)
-        pwh = max(highs)
-        pwl = min(lows)
+        # Authentic PWH / PWL from Weekly candles
+        if len(c_1w) >= 2:
+            pwh = c_1w[-2]['high']
+            pwl = c_1w[-2]['low']
+        else:
+            pwh = max([c['high'] for c in c_1d[-5:]]) if len(c_1d) >= 5 else max([c['high'] for c in c_1h])
+            pwl = min([c['low'] for c in c_1d[-5:]]) if len(c_1d) >= 5 else min([c['low'] for c in c_1h])
 
-        # Equal Highs / Lows detection (double/triple tops/bottoms)
+        # Swing highs and lows on authentic 4H and 1H candles
+        swings_high = []
+        swings_low = []
+        for c in (c_4h[-12:] if len(c_4h) >= 12 else c_4h):
+            swings_high.append(c['high'])
+            swings_low.append(c['low'])
+        for c in (c_1h[-24:] if len(c_1h) >= 24 else c_1h):
+            swings_high.append(c['high'])
+            swings_low.append(c['low'])
+
+        # Equal Highs / Lows detection
         eqh = None
         eql = None
-        for i in range(len(highs) - 2):
-            for j in range(i + 1, len(highs)):
-                if abs(highs[i] - highs[j]) / highs[i] < 0.0008 and highs[i] > current_price:
-                    eqh = max(highs[i], highs[j])
+        for i in range(len(swings_high) - 1):
+            for j in range(i + 1, len(swings_high)):
+                if abs(swings_high[i] - swings_high[j]) / swings_high[i] < 0.0008 and swings_high[i] > current_price:
+                    eqh = max(swings_high[i], swings_high[j])
                     break
-        for i in range(len(lows) - 2):
-            for j in range(i + 1, len(lows)):
-                if abs(lows[i] - lows[j]) / lows[i] < 0.0008 and lows[i] < current_price:
-                    eql = min(lows[i], lows[j])
+        for i in range(len(swings_low) - 1):
+            for j in range(i + 1, len(swings_low)):
+                if abs(swings_low[i] - swings_low[j]) / swings_low[i] < 0.0008 and swings_low[i] < current_price:
+                    eql = min(swings_low[i], swings_low[j])
                     break
 
         if is_bullish:
-            # Bullish candidates above price: EQH, PDH, PWH, 1H swing highs
             candidates = []
             if eqh and eqh > current_price:
                 candidates.append((eqh, "EQH (Equal Highs Magnet)"))
@@ -232,7 +325,7 @@ class PraveenStrategy(BaseStrategy):
                 candidates.append((pdh, "PDH (Previous Day High)"))
             if pwh > current_price:
                 candidates.append((pwh, "PWH (Previous Week High)"))
-            for h in highs:
+            for h in swings_high:
                 if h > current_price:
                     candidates.append((h, "BSL (Buy-Side Liquidity Pool)"))
 
@@ -244,7 +337,6 @@ class PraveenStrategy(BaseStrategy):
                 return {"dol": round(fallback_dol, dec), "type": "BSL Expansion", "label": f"BSL Expansion Target @ {round(fallback_dol, dec)}"}
 
         elif is_bearish:
-            # Bearish candidates below price: EQL, PDL, PWL, 1H swing lows
             candidates = []
             if eql and eql < current_price:
                 candidates.append((eql, "EQL (Equal Lows Magnet)"))
@@ -252,7 +344,7 @@ class PraveenStrategy(BaseStrategy):
                 candidates.append((pdl, "PDL (Previous Day Low)"))
             if pwl < current_price:
                 candidates.append((pwl, "PWL (Previous Week Low)"))
-            for l in lows:
+            for l in swings_low:
                 if l < current_price:
                     candidates.append((l, "SSL (Sell-Side Liquidity Pool)"))
 
@@ -263,7 +355,7 @@ class PraveenStrategy(BaseStrategy):
                 fallback_dol = current_price - max(25.0, (pdh - pdl) * 0.3)
                 return {"dol": round(fallback_dol, dec), "type": "SSL Expansion", "label": f"SSL Expansion Target @ {round(fallback_dol, dec)}"}
 
-        return {"dol": None, "type": "NONE", "label": "No Clear DOL (Unclear Bias)"}
+        return {"dol": None, "type": "NONE", "label": "No DOL Identified (Standing Aside)"}
 
     def _find_30m_pd_arrays(self, c_30m: list, dec: int) -> Dict[str, list]:
         """
@@ -566,6 +658,9 @@ class PraveenStrategy(BaseStrategy):
         c_15m = market_data.get("candles_15m", [])
         c_30m = market_data.get("candles_30m", [])
         c_1h = market_data.get("candles_1h", [])
+        c_4h = market_data.get("candles_4h", [])
+        c_1d = market_data.get("candles_1d", [])
+        c_1w = market_data.get("candles_1w", [])
         c_corr = market_data.get("correlated_candles_1m", [])
 
         dec = 2 if "gold" in symbol.lower() else 1
@@ -581,40 +676,30 @@ class PraveenStrategy(BaseStrategy):
 
         # Midnight Open reference price (00:00 EST / 9:30 AM IST)
         midnight_open = None
-        for c in c_1h[-24:]:
+        for c in reversed(c_1h[-48:]):
             dt = datetime.datetime.fromtimestamp(c['timestamp'], tz=EST_TZ)
             if dt.hour == 0:
                 midnight_open = c['open']
                 break
+        if midnight_open is None and c_1d:
+            midnight_open = c_1d[-1]['open']
 
         # 1. Kill Zones & Session Windows (Page 1)
         kz = self._get_session_and_killzones()
         req_1_kz_active = kz["is_active"]
 
-        # 2. HTF Bias Clear (Page 2)
-        bias_info = self._determine_htf_bias(c_1h, current_price, midnight_open)
+        # 2. HTF Bias Clear (Page 2 - Authentic Weekly, Daily, 4H & 1H Structure)
+        bias_info = self._determine_htf_bias(c_1w, c_1d, c_4h, c_1h, current_price, midnight_open)
         req_2_bias_clear = (bias_info["bias"] in ["BULLISH", "BEARISH"])
         is_bullish = bias_info["is_bullish"]
         is_bearish = bias_info["is_bearish"]
 
-        # 3. DOL Identified (Page 2)
-        dol_info = self._determine_dol(is_bullish, is_bearish, current_price, c_1h, dec)
+        # 3. DOL Identified (Page 2 - Authentic Daily PDH/PDL, Weekly PWH/PWL & Swings)
+        dol_info = self._determine_dol(is_bullish, is_bearish, current_price, c_1w, c_1d, c_4h, c_1h, dec)
         dol_target = dol_info["dol"]
         req_3_dol_identified = (dol_target is not None)
 
-        # 4. 30min PD Arrays & Tapped Rule (Page 3)
-        if not c_30m and len(c_15m) >= 4:
-            # Resample 15m to 30m if needed
-            c_30m = []
-            for i in range(0, len(c_15m) - 1, 2):
-                c_30m.append({
-                    "open": c_15m[i]['open'],
-                    "high": max(c_15m[i]['high'], c_15m[i+1]['high']),
-                    "low": min(c_15m[i]['low'], c_15m[i+1]['low']),
-                    "close": c_15m[i+1]['close'],
-                    "timestamp": c_15m[i]['timestamp']
-                })
-
+        # 4. 30min PD Arrays & Tapped Rule (Page 3 - Authentic 30M Candles)
         pd_arrays = self._find_30m_pd_arrays(c_30m, dec)
         
         # Pick relevant 30M array based on bias

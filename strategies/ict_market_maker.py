@@ -420,28 +420,42 @@ def _smt_divergence_recent(df_a: pd.DataFrame, df_b: pd.DataFrame, cfg: ICTConfi
     return None
 
 
-def _calculate_weekly_bias(h1_df: pd.DataFrame) -> Dict[str, Any]:
+def _calculate_weekly_bias(w_df: pd.DataFrame, h1_df: pd.DataFrame = None) -> Dict[str, Any]:
     """Lesson 8: Weekly Bias from prior week's range (close relative to midpoint)."""
-    if len(h1_df) < 24:
-        return {"bias": "unknown", "label": "Insufficient 1H data for Weekly Bias"}
-    
-    # Take up to 120 1H bars (5 trading days)
-    w_df = h1_df.tail(120)
-    w_high = float(w_df["high"].max())
-    w_low = float(w_df["low"].min())
-    w_close = float(w_df["close"].iloc[-1])
-    w_mid = (w_high + w_low) / 2
-    
-    is_bullish = w_close >= w_mid
-    bias_str = "BULLISH" if is_bullish else "BEARISH"
-    return {
-        "bias": bias_str.lower(),
-        "is_bullish": is_bullish,
-        "high": w_high,
-        "low": w_low,
-        "mid": w_mid,
-        "label": f"{bias_str} (Trading {'above' if is_bullish else 'below'} 5-Day Equilibrium)"
-    }
+    if w_df is not None and len(w_df) >= 2:
+        # Authentic exchange weekly candles
+        w_candle = w_df.iloc[-2]  # previous completed week
+        w_high = float(w_candle["high"])
+        w_low = float(w_candle["low"])
+        w_close = float(w_df.iloc[-1]["close"])
+        w_mid = (w_high + w_low) / 2
+        is_bullish = w_close >= w_mid
+        bias_str = "BULLISH" if is_bullish else "BEARISH"
+        return {
+            "bias": bias_str.lower(),
+            "is_bullish": is_bullish,
+            "high": w_high,
+            "low": w_low,
+            "mid": w_mid,
+            "label": f"{bias_str} (Trading {'above' if is_bullish else 'below'} Prior Week Equilibrium {w_mid:.1f})"
+        }
+    elif h1_df is not None and len(h1_df) >= 24:
+        w_sub = h1_df.tail(120)
+        w_high = float(w_sub["high"].max())
+        w_low = float(w_sub["low"].min())
+        w_close = float(w_sub["close"].iloc[-1])
+        w_mid = (w_high + w_low) / 2
+        is_bullish = w_close >= w_mid
+        bias_str = "BULLISH" if is_bullish else "BEARISH"
+        return {
+            "bias": bias_str.lower(),
+            "is_bullish": is_bullish,
+            "high": w_high,
+            "low": w_low,
+            "mid": w_mid,
+            "label": f"{bias_str} (Trading {'above' if is_bullish else 'below'} 5-Day Equilibrium)"
+        }
+    return {"bias": "unknown", "label": "Insufficient data for Weekly Bias"}
 
 
 def _get_daily_midnight_open(ltf_df: pd.DataFrame, cfg: ICTConfig) -> Optional[float]:
@@ -528,17 +542,23 @@ class ICTMarketMakerStrategy(BaseStrategy):
         avg_range_series = _avg_range(ltf_df, cfg.atr_window)
         amd_phase = _amd_phase_now(ltf_df.iloc[-1], avg_range_series.iloc[-1], kz_id, cfg)
 
-        # HTF Frames (Lessons 3 & 23)
+        # HTF Frames (Lessons 3 & 23 - Authentic 4H, 1H, 30M, 15M, Daily & Weekly)
         raw_15m = market_data.get("candles_15m", [])
         raw_30m = market_data.get("candles_30m", [])
         raw_1h = market_data.get("candles_1h", [])
+        raw_4h = market_data.get("candles_4h", [])
+        raw_1d = market_data.get("candles_1d", [])
+        raw_1w = market_data.get("candles_1w", [])
 
         df_15m = _find_swings(_raw_candles_to_df(raw_15m), cfg) if raw_15m else pd.DataFrame()
         df_30m = _find_swings(_raw_candles_to_df(raw_30m), cfg) if raw_30m else pd.DataFrame()
         df_1h = _find_swings(_raw_candles_to_df(raw_1h), cfg) if raw_1h else pd.DataFrame()
+        df_4h = _find_swings(_raw_candles_to_df(raw_4h), cfg) if raw_4h else pd.DataFrame()
+        df_1d = _find_swings(_raw_candles_to_df(raw_1d), cfg) if raw_1d else pd.DataFrame()
+        df_1w = _find_swings(_raw_candles_to_df(raw_1w), cfg) if raw_1w else pd.DataFrame()
 
-        htf_frames = {"1h": df_1h, "30m": df_30m, "15m": df_15m}
-        preferred_order = ["1h", "30m", "15m"]
+        htf_frames = {"4h": df_4h, "1h": df_1h, "30m": df_30m, "15m": df_15m}
+        preferred_order = ["4h", "1h", "30m", "15m"]
         primary_htf = next((htf_frames[k] for k in preferred_order if not htf_frames[k].empty), df_1h)
         htf_trend = _classify_trend(primary_htf) if not primary_htf.empty else "unknown"
 
@@ -554,7 +574,7 @@ class ICTMarketMakerStrategy(BaseStrategy):
                 "pools": _find_liquidity_pools(ltf_df, cfg),
                 "pd_zone": _premium_discount_ote(ltf_df, cfg),
                 "asian_range": _asian_range_details(ltf_df, now_ts, cfg),
-                "weekly_bias": _calculate_weekly_bias(df_1h) if not df_1h.empty else {"bias": "unknown", "label": "---"},
+                "weekly_bias": _calculate_weekly_bias(df_1w, df_1h),
                 "daily_open": _get_daily_midnight_open(ltf_df, cfg)
             }
             self._last_ltf_ts = now_ts

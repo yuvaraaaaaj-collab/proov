@@ -19,10 +19,12 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
         c_1m = market_data.get("candles_1m", [])
         c_15m = market_data.get("candles_15m", [])
         c_1h = market_data.get("candles_1h", [])
+        c_4h = market_data.get("candles_4h", [])
+        c_1d = market_data.get("candles_1d", [])
         symbol = market_data.get("symbol_name", "NAS100")
         current_price = market_data.get("current_price", 0.0)
 
-        if not c_1m or not c_15m or not c_1h or current_price == 0.0:
+        if not c_1m or not c_15m or current_price == 0.0:
             return {
                 "strategy": self.name,
                 "decision": "Wait / No trade",
@@ -33,16 +35,31 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
 
         dec = 2 if "gold" in symbol.lower() else 1
 
-        # 1. 4H Environment & Dealing Range (5-Day Rolling HTF Range)
-        h4_lookback = min(len(c_1h), 120)
-        h4_high = max([c['high'] for c in c_1h[-h4_lookback:]])
-        h4_low = min([c['low'] for c in c_1h[-h4_lookback:]])
+        # 1. Authentic 4H Environment & Dealing Range
+        if c_4h and len(c_4h) >= 6:
+            recent_4h = c_4h[-30:]  # 5 days of authentic 4H candles
+            h4_high = max([c['high'] for c in recent_4h])
+            h4_low = min([c['low'] for c in recent_4h])
+        elif c_1h:
+            h4_lookback = min(len(c_1h), 120)
+            h4_high = max([c['high'] for c in c_1h[-h4_lookback:]])
+            h4_low = min([c['low'] for c in c_1h[-h4_lookback:]])
+        else:
+            h4_high = current_price
+            h4_low = current_price
         h4_range_mid = (h4_high + h4_low) / 2
         h4_bias = "BULLISH FLOW (Trading in Premium)" if current_price > h4_range_mid else "BEARISH FLOW (Trading in Discount)"
 
-        # 2. 1H Context & Session Levels
-        pdh = max([c['high'] for c in c_1h[-24:-1]]) if len(c_1h) >= 25 else max([c['high'] for c in c_1h])
-        pdl = min([c['low'] for c in c_1h[-24:-1]]) if len(c_1h) >= 25 else min([c['low'] for c in c_1h])
+        # 2. Authentic Session Context & PDH/PDL from Daily Candles
+        if c_1d and len(c_1d) >= 2:
+            pdh = c_1d[-2]['high']
+            pdl = c_1d[-2]['low']
+        elif len(c_1h) >= 25:
+            pdh = max([c['high'] for c in c_1h[-24:-1]])
+            pdl = min([c['low'] for c in c_1h[-24:-1]])
+        else:
+            pdh = max([c['high'] for c in c_1h]) if c_1h else current_price
+            pdl = min([c['low'] for c in c_1h]) if c_1h else current_price
         
         # Align with TradingView Day High and Low for exact chart match
         day_high = market_data.get("day_high", 0.0)
