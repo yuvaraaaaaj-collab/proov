@@ -445,7 +445,10 @@ function renderMarketUpdate(data) {
       const priceFormatted = currentPrice ? currentPrice.toFixed(currentSymbol === 'GOLD' ? 2 : 1) : '';
       let checklistHtml = '';
       for (const [key, val] of entries) {
-        const valStr = String(val);
+        let valStr = String(val);
+        if (valStr.includes(' | Live:')) {
+          valStr = valStr.split(' | Live:')[0].trim();
+        }
         const isPositive = valStr.startsWith('YES') || valStr.startsWith('BUY') || valStr.includes('Confirmed') || valStr.includes('ACTIVE') || valStr.includes('BREAKOUT') || valStr.includes('PASS') || valStr.includes('TAPPED');
         const isWaiting = valStr.startsWith('WAIT') || valStr === 'NO' || valStr === 'NONE' || valStr.startsWith('Outside') || valStr.includes('INSIDE');
         
@@ -455,7 +458,7 @@ function renderMarketUpdate(data) {
             <div class="flex items-center gap-1.5 flex-wrap justify-between sm:justify-end">
               <span class="font-medium font-mono text-[11px] ${
                 isPositive ? 'text-emerald-400 font-bold' : isWaiting ? 'text-slate-400' : 'text-cyan-400'
-              }">${val}</span>
+              }">${valStr}</span>
               ${priceFormatted ? `
                 <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800/90 font-mono text-[10px] text-cyan-300 font-bold tracking-tight shadow-sm flex-shrink-0" title="Live Scanning Price">
                   <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>

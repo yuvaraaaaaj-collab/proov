@@ -90,7 +90,7 @@ class TradingViewFeed:
     def is_healthy(self) -> bool:
         with self._lock:
             now = time.time()
-            return (now - self._last_heartbeat) < 45.0 and self.is_running
+            return (now - self._last_heartbeat) < 25.0 and self.is_running
 
     async def _connect_ws(self, uri: str):
         headers_list = [
@@ -178,16 +178,49 @@ class TradingViewFeed:
                 print(f"[TV Feed] Connected to TradingView; registered {list(TV_INSTRUMENTS.keys())} across 8 resolutions.", flush=True)
                 logger.info("[TV Feed] Connected to TradingView; registered 3 instruments across 8 timeframe resolutions.")
 
+                last_fast_refresh = time.time()
                 while self.is_running:
-                    msg = await ws.recv()
-                    self._last_heartbeat = time.time()
-                    if "~h~" in msg:
-                        await ws.send(msg)
+                    # Timeout guard: Never block forever if server stops sending
+                    try:
+                        msg = await asyncio.wait_for(ws.recv(), timeout=6.0)
+                    except asyncio.TimeoutError:
+                        now_check = time.time()
+                        # If no heartbeat or quote for > 20s, force reconnect
+                        if (now_check - self._last_heartbeat) > 20.0:
+                            logger.warning("[TV Feed] No heartbeat or quote for >20s, reconnecting...")
+                            break
+                        # Otherwise send quote_fast_symbols keepalive
+                        try:
+                            await ws.send(fmt({"m": "quote_fast_symbols", "p": [qs] + list(TV_INSTRUMENTS.values())}))
+                        except Exception:
+                            break
                         continue
 
-                    for part in msg.split("~m~"):
+                    self._last_heartbeat = time.time()
+
+                    # Periodic refresh of quote session every 15s to keep stream active
+                    if (time.time() - last_fast_refresh) > 15.0:
+                        try:
+                            await ws.send(fmt({"m": "quote_fast_symbols", "p": [qs] + list(TV_INSTRUMENTS.values())}))
+                            last_fast_refresh = time.time()
+                        except Exception:
+                            pass
+
+                    parts = msg.split("~m~")
+                    for part in parts:
+                        if not part:
+                            continue
+                        if part.startswith("~h~"):
+                            # Send proper heartbeat echo ONLY for this heartbeat token
+                            try:
+                                await ws.send(f"~m~{len(part)}~m~{part}")
+                            except Exception:
+                                pass
+                            continue
+
                         if not part.startswith("{"):
                             continue
+
                         try:
                             data = json.loads(part)
                             m_type = data.get("m")
@@ -252,9 +285,9 @@ class TradingViewFeed:
                             logger.debug(f"[TV Feed] Message parse error: {parse_err}")
 
             except Exception as e:
-                print(f"[TV Feed] Disconnected or error: {e}. Reconnecting in 3s...", flush=True)
-                logger.warning(f"[TV Feed] Disconnected or error: {e}. Reconnecting in 3s...")
-                await asyncio.sleep(3)
+                print(f"[TV Feed] Disconnected or error: {e}. Reconnecting in 1s...", flush=True)
+                logger.warning(f"[TV Feed] Disconnected or error: {e}. Reconnecting in 1s...")
+                await asyncio.sleep(1)
             finally:
                 if ws is not None:
                     try:
