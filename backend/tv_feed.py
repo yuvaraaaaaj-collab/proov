@@ -92,20 +92,46 @@ class TradingViewFeed:
             now = time.time()
             return (now - self._last_heartbeat) < 45.0 and self.is_running
 
+    async def _connect_ws(self, uri: str):
+        headers_list = [
+            ("Origin", "https://www.tradingview.com"),
+            ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        ]
+        # Attempt 1: additional_headers (websockets >= 14 or asyncio client)
+        try:
+            return await websockets.connect(
+                uri,
+                additional_headers=headers_list,
+                ping_interval=20,
+                ping_timeout=15,
+                open_timeout=20
+            )
+        except TypeError:
+            pass
+
+        # Attempt 2: extra_headers dict (websockets legacy)
+        try:
+            return await websockets.connect(
+                uri,
+                extra_headers=dict(headers_list),
+                ping_interval=20,
+                ping_timeout=15,
+                open_timeout=20
+            )
+        except TypeError:
+            pass
+
+        # Attempt 3: clean connect without extra header parameters
+        return await websockets.connect(
+            uri,
+            ping_interval=20,
+            ping_timeout=15,
+            open_timeout=20
+        )
+
     async def run(self):
         self.is_running = True
         uri = "wss://data.tradingview.com/socket.io/websocket"
-
-        sig = inspect.signature(websockets.connect)
-        conn_kwargs = {"ping_interval": 20, "ping_timeout": 15}
-        headers = {
-            "Origin": "https://www.tradingview.com",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        }
-        if "extra_headers" in sig.parameters:
-            conn_kwargs["extra_headers"] = headers
-        elif "additional_headers" in sig.parameters:
-            conn_kwargs["additional_headers"] = list(headers.items())
 
         def fmt(obj: dict) -> str:
             msg = json.dumps(obj)
@@ -113,7 +139,8 @@ class TradingViewFeed:
 
         while self.is_running:
             try:
-                async with websockets.connect(uri, **conn_kwargs) as ws:
+                ws = await self._connect_ws(uri)
+                async with ws:
                     now_ts = int(time.time())
                     self._last_connected_at = time.time()
                     self._last_heartbeat = time.time()
@@ -131,6 +158,10 @@ class TradingViewFeed:
                         "m": "quote_add_symbols",
                         "p": [qs] + list(TV_INSTRUMENTS.values())
                     }))
+                    await ws.send(fmt({
+                        "m": "quote_fast_symbols",
+                        "p": [qs] + list(TV_INSTRUMENTS.values())
+                    }))
 
                     # 2. Multi-Timeframe Chart Sessions across symbols
                     series_map: Dict[str, tuple] = {}
@@ -144,6 +175,7 @@ class TradingViewFeed:
                             await ws.send(fmt({"m": "resolve_symbol", "p": [cs, f"sym_{sds_id}", f"={sym_spec}"]}))
                             await ws.send(fmt({"m": "create_series", "p": [cs, sds_id, "s1", f"sym_{sds_id}", res, cnt, ""]}))
 
+                    print(f"[TV Feed] Connected to TradingView; registered {list(TV_INSTRUMENTS.keys())} across 8 resolutions.", flush=True)
                     logger.info("[TV Feed] Connected to TradingView; registered 3 instruments across 8 timeframe resolutions.")
 
                     while self.is_running:
@@ -210,22 +242,17 @@ class TradingViewFeed:
                                                 if new_bars:
                                                     with self._lock:
                                                         target = self._candles[sym_k][res_k]
-                                                        if not target:
-                                                            target.extend(new_bars)
-                                                        else:
-                                                            for b in new_bars:
-                                                                if b["timestamp"] == target[-1]["timestamp"]:
-                                                                    target[-1] = b
-                                                                elif b["timestamp"] > target[-1]["timestamp"]:
-                                                                    target.append(b)
-                                                                    # Cap stored list
-                                                                    max_len = 300 if res_k == "1" else 120
-                                                                    if len(target) > max_len:
-                                                                        target.pop(0)
+                                                        bar_dict = {b["timestamp"]: b for b in target}
+                                                        for b in new_bars:
+                                                            bar_dict[b["timestamp"]] = b
+                                                        sorted_bars = [bar_dict[ts] for ts in sorted(bar_dict.keys())]
+                                                        max_len = 300 if res_k == "1" else 120
+                                                        self._candles[sym_k][res_k] = sorted_bars[-max_len:]
                             except Exception as parse_err:
                                 logger.debug(f"[TV Feed] Message parse error: {parse_err}")
 
             except Exception as e:
+                print(f"[TV Feed] Disconnected or error: {e}. Reconnecting in 3s...", flush=True)
                 logger.warning(f"[TV Feed] Disconnected or error: {e}. Reconnecting in 3s...")
                 await asyncio.sleep(3)
 

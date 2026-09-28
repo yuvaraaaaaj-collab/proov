@@ -76,6 +76,8 @@ document.getElementById('sound-btn').addEventListener('click', () => {
 });
 
 // WebSocket Connection
+let wsPingInterval = null;
+
 function connectWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -89,11 +91,20 @@ function connectWebSocket() {
     connDot.className = 'w-2 h-2 rounded-full bg-emerald-500';
     connText.textContent = 'ONLINE';
     connText.className = 'text-[10px] text-emerald-400 font-bold';
+
+    // Start 15s keep-alive heartbeat ping to prevent Railway reverse proxy disconnect
+    if (wsPingInterval) clearInterval(wsPingInterval);
+    wsPingInterval = setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 15000);
   };
 
   ws.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
+      if (data.type === 'pong') return;
       if (data.type === 'MARKET_UPDATE') {
         renderMarketUpdate(data);
       } else if (data.type === 'CROSS_ALERT') {
@@ -113,12 +124,28 @@ function connectWebSocket() {
   };
 
   ws.onclose = () => {
+    if (wsPingInterval) clearInterval(wsPingInterval);
     connDot.className = 'w-2 h-2 rounded-full bg-rose-500 animate-ping';
     connText.textContent = 'RECONNECTING';
     connText.className = 'text-[10px] text-rose-400 font-bold';
     setTimeout(connectWebSocket, 2000);
   };
 }
+
+// Periodic Fallback Poller: guarantees sub-second synchronization even across tab backgrounding or mobile network switches
+setInterval(async () => {
+  try {
+    const res = await fetch(`/api/status?symbol=${encodeURIComponent(currentSymbol)}&t=${Date.now()}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && (data.type === 'MARKET_UPDATE' || data.evaluation)) {
+        renderMarketUpdate(data);
+      }
+    }
+  } catch (e) {
+    // Silent catch
+  }
+}, 2500);
 
 // In-App Toast Banner for Background Multi-Strategy Alerts
 function showCrossAlertToast(data) {

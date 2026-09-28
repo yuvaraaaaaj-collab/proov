@@ -3,12 +3,15 @@ import time
 import json
 import os
 import sys
+import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 # Add project root to sys.path
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -355,6 +358,9 @@ async def websocket_endpoint(websocket: WebSocket):
             data = await websocket.receive_text()
             try:
                 msg = json.loads(data)
+                if msg.get("type") == "ping":
+                    await websocket.send_text(json.dumps({"type": "pong"}))
+                    continue
                 if "switch_symbol" in msg:
                     account_config["active_symbol"] = msg["switch_symbol"]
                 if "switch_strategy" in msg:

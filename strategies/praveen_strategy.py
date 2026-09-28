@@ -742,24 +742,62 @@ class PraveenStrategy(BaseStrategy):
         req_4_array_tapped = False
         tapped_label = "Scanning 30M PD Arrays"
 
+        # Multi-candle lookback: 90 1M candles (90 mins), plus recent 30M and 15M candles
+        lookback_1m = c_1m[-90:] if len(c_1m) >= 90 else c_1m
+        recent_1m_high = max([c['high'] for c in lookback_1m]) if lookback_1m else current_price
+        recent_1m_low = min([c['low'] for c in lookback_1m]) if lookback_1m else current_price
+        if c_30m:
+            for c in c_30m[-2:]:
+                recent_1m_high = max(recent_1m_high, c['high'])
+                recent_1m_low = min(recent_1m_low, c['low'])
+
         if is_bullish:
-            candidates = [a for a in pd_arrays["bull_fvgs"] + pd_arrays["bull_obs"] if a["bottom"] <= current_price * 1.005]
-            if candidates:
+            candidates = [a for a in pd_arrays["bull_fvgs"] + pd_arrays["bull_obs"] if a["bottom"] <= current_price * 1.015]
+            if not candidates and c_15m:
+                pd_15m = self._find_30m_pd_arrays(c_15m, dec)
+                candidates = [a for a in pd_15m["bull_fvgs"] + pd_15m["bull_obs"] if a["bottom"] <= current_price * 1.015]
+
+            tapped_candidates = []
+            for a in candidates:
+                in_zone = (current_price >= a["bottom"] and current_price <= a["top"])
+                tapped_recently = (recent_1m_low <= a["top"] and recent_1m_high >= a["bottom"] and current_price >= a["bottom"] * 0.990)
+                if in_zone or tapped_recently:
+                    tapped_candidates.append(a)
+
+            if tapped_candidates:
+                active_pd_array = min(tapped_candidates, key=lambda x: abs(x["ce"] - current_price))
+                req_4_array_tapped = True
+                tapped_label = f"TAPPED [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]"
+            elif candidates:
                 active_pd_array = min(candidates, key=lambda x: abs(x["ce"] - current_price))
-                recent_1m_low = min([c['low'] for c in c_1m[-15:]])
-                in_zone = (current_price >= active_pd_array["bottom"] and current_price <= active_pd_array["top"])
-                tapped_recently = (recent_1m_low <= active_pd_array["top"] and current_price >= active_pd_array["bottom"] * 0.998)
-                req_4_array_tapped = in_zone or tapped_recently
-                tapped_label = f"TAPPED [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]" if req_4_array_tapped else f"WAITING for Tap [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]"
+                req_4_array_tapped = False
+                tapped_label = f"WAITING for Tap [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]"
+            else:
+                tapped_label = "WAITING (No 30M Discount Array in Range)"
+
         elif is_bearish:
-            candidates = [a for a in pd_arrays["bear_fvgs"] + pd_arrays["bear_obs"] if a["top"] >= current_price * 0.995]
-            if candidates:
+            candidates = [a for a in pd_arrays["bear_fvgs"] + pd_arrays["bear_obs"] if a["top"] >= current_price * 0.985]
+            if not candidates and c_15m:
+                pd_15m = self._find_30m_pd_arrays(c_15m, dec)
+                candidates = [a for a in pd_15m["bear_fvgs"] + pd_15m["bear_obs"] if a["top"] >= current_price * 0.985]
+
+            tapped_candidates = []
+            for a in candidates:
+                in_zone = (current_price <= a["top"] and current_price >= a["bottom"])
+                tapped_recently = (recent_1m_high >= a["bottom"] and recent_1m_low <= a["top"] and current_price <= a["top"] * 1.010)
+                if in_zone or tapped_recently:
+                    tapped_candidates.append(a)
+
+            if tapped_candidates:
+                active_pd_array = min(tapped_candidates, key=lambda x: abs(x["ce"] - current_price))
+                req_4_array_tapped = True
+                tapped_label = f"TAPPED [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]"
+            elif candidates:
                 active_pd_array = min(candidates, key=lambda x: abs(x["ce"] - current_price))
-                recent_1m_high = max([c['high'] for c in c_1m[-15:]])
-                in_zone = (current_price <= active_pd_array["top"] and current_price >= active_pd_array["bottom"])
-                tapped_recently = (recent_1m_high >= active_pd_array["bottom"] and current_price <= active_pd_array["top"] * 1.002)
-                req_4_array_tapped = in_zone or tapped_recently
-                tapped_label = f"TAPPED [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]" if req_4_array_tapped else f"WAITING for Tap [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]"
+                req_4_array_tapped = False
+                tapped_label = f"WAITING for Tap [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]"
+            else:
+                tapped_label = "WAITING (No 30M Premium Array in Range)"
 
         # 5. LRLR Path Clear Check (Page 3)
         lrlr_info = self._check_lrlr_path(current_price, dol_target, is_bullish, pd_arrays)
