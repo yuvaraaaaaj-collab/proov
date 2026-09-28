@@ -138,123 +138,129 @@ class TradingViewFeed:
             return f"~m~{len(msg)}~m~{msg}"
 
         while self.is_running:
+            ws = None
             try:
                 ws = await self._connect_ws(uri)
-                async with ws:
-                    now_ts = int(time.time())
-                    self._last_connected_at = time.time()
+                now_ts = int(time.time())
+                self._last_connected_at = time.time()
+                self._last_heartbeat = time.time()
+                qs = f"qs_{now_ts}"
+
+                await ws.send(fmt({"m": "set_auth_token", "p": ["unauthorized_user_token"]}))
+
+                # 1. Quote Session (sub-second tick prices)
+                await ws.send(fmt({"m": "quote_create_session", "p": [qs]}))
+                await ws.send(fmt({
+                    "m": "quote_set_fields",
+                    "p": [qs, "lp", "bid", "ask", "ch", "high_price", "low_price", "open_price", "prev_close_price"]
+                }))
+                await ws.send(fmt({
+                    "m": "quote_add_symbols",
+                    "p": [qs] + list(TV_INSTRUMENTS.values())
+                }))
+                await ws.send(fmt({
+                    "m": "quote_fast_symbols",
+                    "p": [qs] + list(TV_INSTRUMENTS.values())
+                }))
+
+                # 2. Multi-Timeframe Chart Sessions across symbols
+                series_map: Dict[str, tuple] = {}
+                for sym_key, tv_ticker in TV_INSTRUMENTS.items():
+                    for res, cnt in TV_RESOLUTIONS:
+                        sds_id = f"s_{sym_key}_{res}"
+                        cs = f"cs_{sym_key}_{res}_{now_ts}"
+                        series_map[sds_id] = (sym_key, res)
+                        await ws.send(fmt({"m": "chart_create_session", "p": [cs, ""]}))
+                        sym_spec = json.dumps({"adjustment": "splits", "symbol": tv_ticker})
+                        await ws.send(fmt({"m": "resolve_symbol", "p": [cs, f"sym_{sds_id}", f"={sym_spec}"]}))
+                        await ws.send(fmt({"m": "create_series", "p": [cs, sds_id, "s1", f"sym_{sds_id}", res, cnt, ""]}))
+
+                print(f"[TV Feed] Connected to TradingView; registered {list(TV_INSTRUMENTS.keys())} across 8 resolutions.", flush=True)
+                logger.info("[TV Feed] Connected to TradingView; registered 3 instruments across 8 timeframe resolutions.")
+
+                while self.is_running:
+                    msg = await ws.recv()
                     self._last_heartbeat = time.time()
-                    qs = f"qs_{now_ts}"
+                    if "~h~" in msg:
+                        await ws.send(msg)
+                        continue
 
-                    await ws.send(fmt({"m": "set_auth_token", "p": ["unauthorized_user_token"]}))
-
-                    # 1. Quote Session (sub-second tick prices)
-                    await ws.send(fmt({"m": "quote_create_session", "p": [qs]}))
-                    await ws.send(fmt({
-                        "m": "quote_set_fields",
-                        "p": [qs, "lp", "bid", "ask", "ch", "high_price", "low_price", "open_price", "prev_close_price"]
-                    }))
-                    await ws.send(fmt({
-                        "m": "quote_add_symbols",
-                        "p": [qs] + list(TV_INSTRUMENTS.values())
-                    }))
-                    await ws.send(fmt({
-                        "m": "quote_fast_symbols",
-                        "p": [qs] + list(TV_INSTRUMENTS.values())
-                    }))
-
-                    # 2. Multi-Timeframe Chart Sessions across symbols
-                    series_map: Dict[str, tuple] = {}
-                    for sym_key, tv_ticker in TV_INSTRUMENTS.items():
-                        for res, cnt in TV_RESOLUTIONS:
-                            sds_id = f"s_{sym_key}_{res}"
-                            cs = f"cs_{sym_key}_{res}_{now_ts}"
-                            series_map[sds_id] = (sym_key, res)
-                            await ws.send(fmt({"m": "chart_create_session", "p": [cs, ""]}))
-                            sym_spec = json.dumps({"adjustment": "splits", "symbol": tv_ticker})
-                            await ws.send(fmt({"m": "resolve_symbol", "p": [cs, f"sym_{sds_id}", f"={sym_spec}"]}))
-                            await ws.send(fmt({"m": "create_series", "p": [cs, sds_id, "s1", f"sym_{sds_id}", res, cnt, ""]}))
-
-                    print(f"[TV Feed] Connected to TradingView; registered {list(TV_INSTRUMENTS.keys())} across 8 resolutions.", flush=True)
-                    logger.info("[TV Feed] Connected to TradingView; registered 3 instruments across 8 timeframe resolutions.")
-
-                    while self.is_running:
-                        msg = await ws.recv()
-                        self._last_heartbeat = time.time()
-                        if "~h~" in msg:
-                            await ws.send(msg)
+                    for part in msg.split("~m~"):
+                        if not part.startswith("{"):
                             continue
+                        try:
+                            data = json.loads(part)
+                            m_type = data.get("m")
 
-                        for part in msg.split("~m~"):
-                            if not part.startswith("{"):
-                                continue
-                            try:
-                                data = json.loads(part)
-                                m_type = data.get("m")
+                            # Process real-time quote ticks
+                            if m_type == "qsd":
+                                p = data.get("p", [])
+                                if len(p) >= 2 and isinstance(p[1], dict):
+                                    sym_data = p[1]
+                                    sym_name = sym_data.get("n", "")
+                                    vals = sym_data.get("v", {})
+                                    lp = vals.get("lp") or vals.get("bid")
+                                    if lp is not None:
+                                        key = self._normalize_key(sym_name)
+                                        price_val = float(lp)
+                                        now_f = time.time()
+                                        with self._lock:
+                                            prev = self._quotes[key]
+                                            self._quotes[key] = {
+                                                "price": price_val,
+                                                "high": float(vals.get("high_price", prev["high"] or price_val)),
+                                                "low": float(vals.get("low_price", prev["low"] or price_val)),
+                                                "updated_at": now_f
+                                            }
+                                            # Update current open candle close
+                                            c_1m = self._candles[key].get("1")
+                                            if c_1m:
+                                                c_1m[-1]["close"] = price_val
+                                                c_1m[-1]["high"] = max(c_1m[-1]["high"], price_val)
+                                                c_1m[-1]["low"] = min(c_1m[-1]["low"], price_val)
 
-                                # Process real-time quote ticks
-                                if m_type == "qsd":
-                                    p = data.get("p", [])
-                                    if len(p) >= 2 and isinstance(p[1], dict):
-                                        sym_data = p[1]
-                                        sym_name = sym_data.get("n", "")
-                                        vals = sym_data.get("v", {})
-                                        lp = vals.get("lp") or vals.get("bid")
-                                        if lp is not None:
-                                            key = self._normalize_key(sym_name)
-                                            price_val = float(lp)
-                                            now_f = time.time()
-                                            with self._lock:
-                                                prev = self._quotes[key]
-                                                self._quotes[key] = {
-                                                    "price": price_val,
-                                                    "high": float(vals.get("high_price", prev["high"] or price_val)),
-                                                    "low": float(vals.get("low_price", prev["low"] or price_val)),
-                                                    "updated_at": now_f
-                                                }
-                                                # Update current open candle close
-                                                c_1m = self._candles[key].get("1")
-                                                if c_1m:
-                                                    c_1m[-1]["close"] = price_val
-                                                    c_1m[-1]["high"] = max(c_1m[-1]["high"], price_val)
-                                                    c_1m[-1]["low"] = min(c_1m[-1]["low"], price_val)
-
-                                # Process chart bar timescale updates
-                                elif m_type == "timescale_update":
-                                    p = data.get("p", [])
-                                    if len(p) >= 2 and isinstance(p[1], dict):
-                                        sds = p[1]
-                                        for sds_id, s_info in series_map.items():
-                                            if sds_id in sds and "s" in sds[sds_id]:
-                                                sym_k, res_k = s_info
-                                                new_bars = []
-                                                for bar_item in sds[sds_id]["s"]:
-                                                    v = bar_item.get("v")
-                                                    if v and len(v) >= 5:
-                                                        new_bars.append({
-                                                            "timestamp": int(v[0]),
-                                                            "open": float(v[1]),
-                                                            "high": float(v[2]),
-                                                            "low": float(v[3]),
-                                                            "close": float(v[4]),
-                                                            "volume": float(v[5]) if len(v) > 5 else 0.0
-                                                        })
-                                                if new_bars:
-                                                    with self._lock:
-                                                        target = self._candles[sym_k][res_k]
-                                                        bar_dict = {b["timestamp"]: b for b in target}
-                                                        for b in new_bars:
-                                                            bar_dict[b["timestamp"]] = b
-                                                        sorted_bars = [bar_dict[ts] for ts in sorted(bar_dict.keys())]
-                                                        max_len = 300 if res_k == "1" else 120
-                                                        self._candles[sym_k][res_k] = sorted_bars[-max_len:]
-                            except Exception as parse_err:
-                                logger.debug(f"[TV Feed] Message parse error: {parse_err}")
+                            # Process chart bar timescale updates
+                            elif m_type == "timescale_update":
+                                p = data.get("p", [])
+                                if len(p) >= 2 and isinstance(p[1], dict):
+                                    sds = p[1]
+                                    for sds_id, s_info in series_map.items():
+                                        if sds_id in sds and "s" in sds[sds_id]:
+                                            sym_k, res_k = s_info
+                                            new_bars = []
+                                            for bar_item in sds[sds_id]["s"]:
+                                                v = bar_item.get("v")
+                                                if v and len(v) >= 5:
+                                                    new_bars.append({
+                                                        "timestamp": int(v[0]),
+                                                        "open": float(v[1]),
+                                                        "high": float(v[2]),
+                                                        "low": float(v[3]),
+                                                        "close": float(v[4]),
+                                                        "volume": float(v[5]) if len(v) > 5 else 0.0
+                                                    })
+                                            if new_bars:
+                                                with self._lock:
+                                                    target = self._candles[sym_k][res_k]
+                                                    bar_dict = {b["timestamp"]: b for b in target}
+                                                    for b in new_bars:
+                                                        bar_dict[b["timestamp"]] = b
+                                                    sorted_bars = [bar_dict[ts] for ts in sorted(bar_dict.keys())]
+                                                    max_len = 300 if res_k == "1" else 120
+                                                    self._candles[sym_k][res_k] = sorted_bars[-max_len:]
+                        except Exception as parse_err:
+                            logger.debug(f"[TV Feed] Message parse error: {parse_err}")
 
             except Exception as e:
                 print(f"[TV Feed] Disconnected or error: {e}. Reconnecting in 3s...", flush=True)
                 logger.warning(f"[TV Feed] Disconnected or error: {e}. Reconnecting in 3s...")
                 await asyncio.sleep(3)
+            finally:
+                if ws is not None:
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
 
 
 tv_feed = TradingViewFeed()
