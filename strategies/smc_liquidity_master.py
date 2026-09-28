@@ -83,13 +83,14 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
         bsl_swept = recent_1m_high >= bsl_15m
         ssl_swept = recent_1m_low <= ssl_15m
 
+        live_str = f"Live: {current_price}"
         checklist = {
             "4H Swing Bias": h4_bias,
             "1H Session Context": f"PDH: {round(pdh, dec)} | PDL: {round(pdl, dec)}",
             "Today's Intraday Range": f"High: {round(day_high, dec)} | Low: {round(day_low, dec)}" if day_high > 0 else "---",
-            "15M Liquidity": f"BSL: {round(bsl_15m, dec)} | SSL: {round(ssl_15m, dec)}",
+            "15M Liquidity": f"BSL: {round(bsl_15m, dec)} | SSL: {round(ssl_15m, dec)} | {live_str}",
             "Session Timing": session_label,
-            "Liquidity Taken": "YES" if (bsl_swept or ssl_swept) else "NO",
+            "Liquidity Taken": f"{'YES' if (bsl_swept or ssl_swept) else 'NO'} | {live_str}",
             "1M Control & BOS": "NO",
             "Protected Level": "NONE",
             "POI Formed": "NO",
@@ -133,7 +134,7 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                 
                 # POI: 1M Bearish FVG / Supply midpoint
                 poi_entry = (protected_high + current_price) / 2
-                checklist["POI Formed"] = f"1M Supply @ {round(poi_entry, dec)}"
+                checklist["POI Formed"] = f"1M Supply @ {round(poi_entry, dec)} | {live_str}"
                 
                 # SL: beyond Protected High with standardized buffer
                 sl = protected_high + buf
@@ -186,7 +187,7 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                 
                 # POI: 1M Bullish Demand midpoint
                 poi_entry = (protected_low + current_price) / 2
-                checklist["POI Formed"] = f"1M Demand @ {round(poi_entry, dec)}"
+                checklist["POI Formed"] = f"1M Demand @ {round(poi_entry, dec)} | {live_str}"
                 
                 sl = protected_low - buf
                 sl_distance = abs(poi_entry - sl)

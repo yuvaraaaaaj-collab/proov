@@ -26,11 +26,14 @@ logger = logging.getLogger("notifier")
 
 SETTINGS_FILE = Path(__file__).resolve().parent / "alert_settings.json"
 
+PERMANENT_TG_TOKEN = "8337242020:AAHNxLpzCyQ_VGn_98uH0QG3yvI18WjCqcc"
+PERMANENT_TG_CHAT_IDS = ["1272954818", "8697806994"]
+
 DEFAULT_SETTINGS = {
     "vip_pin": "7788",
-    "telegram_enabled": False,
-    "telegram_bot_token": "",
-    "telegram_chat_ids": [],  # List of chat IDs (user + friends)
+    "telegram_enabled": True,
+    "telegram_bot_token": PERMANENT_TG_TOKEN,
+    "telegram_chat_ids": PERMANENT_TG_CHAT_IDS,  # Permanent chat IDs: 1272954818, 8697806994
     "whatsapp_enabled": False,
     "whatsapp_apikey": "",
     "whatsapp_phones": [],    # List of phone numbers with country code e.g. +91XXXXXXXXXX
@@ -62,7 +65,14 @@ def load_alert_settings() -> Dict[str, Any]:
         except Exception as e:
             logger.error(f"Error loading alert settings: {e}")
 
-    # Fallback to Environment Variables (vital for Railway persistence across restarts)
+    # Ensure permanent credentials if empty or missing
+    if not loaded.get("telegram_bot_token"):
+        loaded["telegram_bot_token"] = PERMANENT_TG_TOKEN
+    if not loaded.get("telegram_chat_ids"):
+        loaded["telegram_chat_ids"] = list(PERMANENT_TG_CHAT_IDS)
+    loaded["telegram_enabled"] = True
+
+    # Fallback to Environment Variables if explicitly provided
     env_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if env_token:
         loaded["telegram_bot_token"] = env_token

@@ -217,8 +217,11 @@ function renderMarketUpdate(data) {
 
   // 1. Live Price (if static element exists)
   const priceEl = document.getElementById('live-price');
-  if (priceEl && currentPrice) {
-    priceEl.textContent = currentPrice.toFixed(currentSymbol === 'GOLD' ? 2 : 1);
+  const chkLiveVal = document.getElementById('checklist-live-val');
+  if (currentPrice) {
+    const formatted = currentPrice.toFixed(currentSymbol === 'GOLD' ? 2 : 1);
+    if (priceEl) priceEl.textContent = formatted;
+    if (chkLiveVal) chkLiveVal.textContent = formatted;
   }
 
   // 2. Decision Badge
@@ -439,18 +442,28 @@ function renderMarketUpdate(data) {
         </div>
       `;
     } else {
+      const priceFormatted = currentPrice ? currentPrice.toFixed(currentSymbol === 'GOLD' ? 2 : 1) : '';
       let checklistHtml = '';
       for (const [key, val] of entries) {
         const valStr = String(val);
-        const isPositive = valStr.startsWith('YES') || valStr.startsWith('BUY') || valStr.includes('Confirmed') || valStr.includes('ACTIVE') || valStr.includes('BREAKOUT');
+        const isPositive = valStr.startsWith('YES') || valStr.startsWith('BUY') || valStr.includes('Confirmed') || valStr.includes('ACTIVE') || valStr.includes('BREAKOUT') || valStr.includes('PASS') || valStr.includes('TAPPED');
         const isWaiting = valStr.startsWith('WAIT') || valStr === 'NO' || valStr === 'NONE' || valStr.startsWith('Outside') || valStr.includes('INSIDE');
         
         checklistHtml += `
-          <div class="flex justify-between items-center py-1.5 border-b border-slate-800/60 last:border-none">
-            <span class="text-slate-400 font-medium">${key}</span>
-            <span class="font-medium font-mono text-[11px] ${
-              isPositive ? 'text-emerald-400 font-bold' : isWaiting ? 'text-slate-400' : 'text-cyan-400'
-            }">${val}</span>
+          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between py-1.5 border-b border-slate-800/60 last:border-none gap-1 sm:gap-2">
+            <span class="text-slate-400 font-medium text-xs">${key}</span>
+            <div class="flex items-center gap-1.5 flex-wrap justify-between sm:justify-end">
+              <span class="font-medium font-mono text-[11px] ${
+                isPositive ? 'text-emerald-400 font-bold' : isWaiting ? 'text-slate-400' : 'text-cyan-400'
+              }">${val}</span>
+              ${priceFormatted ? `
+                <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-950 border border-slate-800/90 font-mono text-[10px] text-cyan-300 font-bold tracking-tight shadow-sm flex-shrink-0" title="Live Scanning Price">
+                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span class="text-[9px] text-slate-500 uppercase font-semibold">Live:</span>
+                  <span>${priceFormatted}</span>
+                </span>
+              ` : ''}
+            </div>
           </div>
         `;
       }

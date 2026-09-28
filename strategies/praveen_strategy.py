@@ -905,14 +905,15 @@ class PraveenStrategy(BaseStrategy):
             size = "Skip entirely"
 
         # Complete Strategy Flow Verification Checklist (Page 5)
+        live_str = f"Live: {current_price}"
         checklist = {
             "1. Kill Zone Active": f"{'YES' if req_1_kz_active else 'WAITING'} ({kz['name']})",
             "2. HTF Bias Clear": f"{'PASS' if req_2_bias_clear else 'FAIL'} ({bias_info['label']})",
-            "3. Draw on Liquidity (DOL)": f"{'PASS' if req_3_dol_identified else 'FAIL'} ({dol_info['label']})",
-            "4. 30min PD Array Tapped": f"{'PASS' if req_4_array_tapped else 'WAITING'} ({tapped_label})",
+            "3. Draw on Liquidity (DOL)": f"{'PASS' if req_3_dol_identified else 'FAIL'} ({dol_info['label']}) | {live_str}",
+            "4. 30min PD Array Tapped": f"{'PASS' if req_4_array_tapped else 'WAITING'} ({tapped_label}) | {live_str}",
             "5. LRLR Path Clear": f"{'PASS' if req_5_lrlr_clear else 'FAIL'} ({lrlr_info['label']})",
-            "6. 1min CISD Confirmed": f"{'CONFIRMED' if req_6_cisd_confirmed else ('INVALIDATED' if is_invalidated else 'WAITING')} ({cisd_info['label']})",
-            "7. 1min IFVG Confirmed": f"{'CONFIRMED' if req_7_ifvg_confirmed else 'WAITING'} ({ifvg_info['label']})",
+            "6. 1min CISD Confirmed": f"{'CONFIRMED' if req_6_cisd_confirmed else ('INVALIDATED' if is_invalidated else 'WAITING')} ({cisd_info['label']}) | {live_str}",
+            "7. 1min IFVG Confirmed": f"{'CONFIRMED' if req_7_ifvg_confirmed else 'WAITING'} ({ifvg_info['label']}) | {live_str}",
             "8. Minimum 1:2 R:R": f"{'PASS' if req_8_rr_valid else 'FAIL'} (1:{calculated_rr:.2f} R:R Target)",
             "9. Setup Grade & Action": f"Grade {grade} [{req_count}/8 Req, {bonus_count}/4 Bonus] -> {action} ({size})",
             "10. SMT Divergence": smt_eval["label"],

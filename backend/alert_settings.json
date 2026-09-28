@@ -1,0 +1,13 @@
+{
+  "vip_pin": "7788",
+  "telegram_enabled": true,
+  "telegram_bot_token": "8337242020:AAHNxLpzCyQ_VGn_98uH0QG3yvI18WjCqcc",
+  "telegram_chat_ids": [
+    "1272954818",
+    "8697806994"
+  ],
+  "whatsapp_enabled": false,
+  "whatsapp_apikey": "",
+  "whatsapp_phones": [],
+  "push_enabled": true
+}
