@@ -149,13 +149,18 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                 
                 tp_distance = abs(poi_entry - tp)
                 rr = tp_distance / sl_distance if sl_distance > 0 else 0
-                
-                if rr >= min_rr:
+
+                # Invalidation: price breached SL or already reached TP
+                if current_price >= sl or current_price <= tp:
+                    decision = "Wait / No trade"
+                    reason = "Price reached target or breached protected level."
+                elif rr >= min_rr:
                     decision = "Sell limit"
                     reason = f"15M BSL swept -> 1M Bearish BOS -> Valid POI Retracement with 1:{round(rr, 2)} R:R."
                     order_ticket = build_order_ticket(
                         order_type="SELL LIMIT",
                         symbol=symbol,
+                        strategy_name=self.name,
                         entry_price=poi_entry,
                         stop_loss=sl,
                         take_profit=tp,
@@ -196,13 +201,18 @@ class SMCLiquidityMasterStrategy(BaseStrategy):
                 
                 tp_distance = abs(tp - poi_entry)
                 rr = tp_distance / sl_distance if sl_distance > 0 else 0
-                
-                if rr >= min_rr:
+
+                # Invalidation: price breached SL or already reached TP
+                if current_price <= sl or current_price >= tp:
+                    decision = "Wait / No trade"
+                    reason = "Price reached target or breached protected level."
+                elif rr >= min_rr:
                     decision = "Buy limit"
                     reason = f"15M SSL swept -> 1M Bullish BOS -> Valid POI Retracement with 1:{round(rr, 2)} R:R."
                     order_ticket = build_order_ticket(
                         order_type="BUY LIMIT",
                         symbol=symbol,
+                        strategy_name=self.name,
                         entry_price=poi_entry,
                         stop_loss=sl,
                         take_profit=tp,

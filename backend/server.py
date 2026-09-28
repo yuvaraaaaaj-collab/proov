@@ -387,10 +387,12 @@ async def websocket_endpoint(websocket: WebSocket):
             connected_clients.remove(websocket)
 
 # Background scanner loop running every 1.5 seconds (Multi-Strategy, Dual-Symbol Concurrent Engine)
+# Background scanner loop running every 1.5 seconds (Multi-Strategy, Dual-Symbol Concurrent Engine)
 async def market_scanner_loop():
     global latest_evaluation
-    # Tracks last decision per (symbol, strategy_id)
-    last_decision = {}
+    # Tracks dispatched alert setups by unique key (symbol, strat_id, order_type, entry, sl, tp) -> timestamp
+    dispatched_setups: Dict[str, float] = {}
+    last_decision: Dict[tuple, str] = {}
     symbols_to_scan = ["NAS100", "GOLD"]
     
     while True:
@@ -398,31 +400,16 @@ async def market_scanner_loop():
             active_sym = account_config.get("active_symbol", "NAS100")
             active_strat = strategy_mgr.get_active_strategy_id()
             
+            # Concurrently fetch market data for NAS100 and GOLD (Zero latency)
+            data_nas, data_gold = await asyncio.gather(
+                asyncio.to_thread(market_data_provider.get_market_data, "NAS100"),
+                asyncio.to_thread(market_data_provider.get_market_data, "GOLD")
+            )
+            data_map = {"NAS100": data_nas, "GOLD": data_gold}
+            
             for symbol in symbols_to_scan:
-                # Fetch fresh market data
-                data = await asyncio.to_thread(market_data_provider.get_market_data, symbol)
+                data = data_map.get(symbol, {})
                 current_price = data.get("current_price", 0.0)
-                
-                # Automatic cleanup of stale or price-invalidated tickets
-                exist_t = last_valid_tickets.get(symbol)
-                if exist_t:
-                    t_age = time.time() - exist_t.get("timestamp", 0)
-                    t_entry = float(exist_t.get("Entry Price") or exist_t.get("Entry") or 0)
-                    t_sl = float(exist_t.get("Stop Loss") or 0)
-                    t_tp = float(exist_t.get("Take Profit") or 0)
-                    is_buy = "BUY" in str(exist_t.get("Order Type", "")).upper()
-                    
-                    is_stale = (t_age > 1500)
-                    if current_price > 0 and t_sl > 0 and t_tp > 0:
-                        if is_buy and (current_price <= t_sl or current_price >= t_tp):
-                            is_stale = True
-                        elif not is_buy and (current_price >= t_sl or current_price <= t_tp):
-                            is_stale = True
-                        max_dist = 40.0 if symbol == "GOLD" else 200.0
-                        if abs(current_price - t_entry) > max_dist:
-                            is_stale = True
-                    if is_stale:
-                        del last_valid_tickets[symbol]
                 
                 # Concurrently evaluate ALL registered strategies on this symbol!
                 all_evals = strategy_mgr.evaluate_all(data, account_config)
@@ -433,6 +420,7 @@ async def market_scanner_loop():
                     ticket = eval_result.get("order_ticket")
                     key = (symbol, strat_id)
                     prev_decision = last_decision.get(key, "Wait / No trade")
+                    last_decision[key] = current_decision
                     
                     # A TRUE actionable entry alert REQUIRES a non-empty order ticket with Entry, SL, and TP!
                     has_valid_ticket = (
@@ -443,54 +431,100 @@ async def market_scanner_loop():
                         and str(ticket.get("Stop Loss")) != "---"
                     )
                     
-                    # Persist valid ticket so it stays constant and does not disappear across updates
-                    if has_valid_ticket and strat_id != "session_breakout":
-                        last_valid_tickets[symbol] = {
-                            **ticket,
-                            "strategy": eval_result.get("strategy", strat_id),
-                            "strategy_id": strat_id,
-                            "symbol": symbol,
-                            "timestamp": time.time()
-                        }
-                    
-                    is_new_alert = (
-                        current_decision not in ["Wait / No trade", None]
-                        and has_valid_ticket
-                        and (current_decision != prev_decision)
-                    )
-                    last_decision[key] = current_decision
-                    
                     strat_name = eval_result.get("strategy", strat_id)
                     
-                    # Whenever ANY strategy detects a valid entry on EITHER NAS100 or GOLD:
-                    # Note: Notification push is explicitly disabled for session momentum breakout
-                    if is_new_alert and strat_id != "session_breakout":
-                        # 1. Dispatch background alerts: Telegram, WhatsApp, etc.
-                        asyncio.create_task(dispatch_trade_alert(
-                            symbol,
-                            strat_name,
-                            eval_result,
-                            current_price
-                        ))
+                    # Persist valid ticket with fixed created_at (NEVER overwrite timestamp on every tick!)
+                    if has_valid_ticket and strat_id != "session_breakout":
+                        cur_entry = float(ticket.get("Entry Price") or ticket.get("Entry") or 0)
+                        exist_t = last_valid_tickets.get(symbol)
                         
-                        # 2. If this alert is NOT the exact symbol + strategy currently on screen, broadcast a CROSS_ALERT
-                        if not (symbol == active_sym and strat_id == active_strat):
-                            alert_payload = {
-                                "type": "CROSS_ALERT",
-                                "symbol": symbol,
-                                "current_price": current_price,
-                                "strategy_id": strat_id,
-                                "strategy_name": strat_name,
-                                "evaluation": eval_result,
-                                "is_alert": True
-                            }
-                            if connected_clients:
-                                msg_str = json.dumps(alert_payload)
-                                for client in list(connected_clients):
-                                    try:
-                                        await client.send_text(msg_str)
-                                    except Exception:
-                                        pass
+                        is_new_setup = (
+                            not exist_t
+                            or exist_t.get("strategy_id") != strat_id
+                            or abs(cur_entry - float(exist_t.get("Entry Price") or exist_t.get("Entry") or 0)) > 0.05
+                        )
+                        created_at = time.time() if is_new_setup else exist_t.get("created_at", time.time())
+                        
+                        last_valid_tickets[symbol] = {
+                            **ticket,
+                            "strategy": strat_name,
+                            "strategy_name": strat_name,
+                            "strategy_id": strat_id,
+                            "symbol": symbol,
+                            "created_at": created_at,
+                            "timestamp": created_at
+                        }
+                    
+                    # Setup-Key based Alert Trigger: fires INSTANTLY on new setup with zero delay
+                    if has_valid_ticket and current_decision not in ["Wait / No trade", None] and strat_id != "session_breakout":
+                        order_t_str = str(ticket.get("Order Type", "")).upper()
+                        entry_val = float(ticket.get("Entry Price") or ticket.get("Entry") or 0)
+                        sl_val = float(ticket.get("Stop Loss") or 0)
+                        tp_val = float(ticket.get("Take Profit") or 0)
+                        setup_key = f"{symbol}_{strat_id}_{order_t_str}_{round(entry_val, 2)}_{round(sl_val, 2)}_{round(tp_val, 2)}"
+                        
+                        last_sent = dispatched_setups.get(setup_key, 0.0)
+                        is_new_alert = (time.time() - last_sent) > 1800  # 30 mins debounce for identical setup
+                        
+                        if is_new_alert:
+                            dispatched_setups[setup_key] = time.time()
+                            print(f"[Instant Alert Trigger] Symbol: {symbol} | Strategy: {strat_name} | Key: {setup_key}")
+                            
+                            # 1. Dispatch background alerts: Telegram, WhatsApp, etc.
+                            asyncio.create_task(dispatch_trade_alert(
+                                symbol,
+                                strat_name,
+                                eval_result,
+                                current_price
+                            ))
+                            
+                            # 2. If this alert is NOT the exact symbol + strategy currently on screen, broadcast a CROSS_ALERT
+                            if not (symbol == active_sym and strat_id == active_strat):
+                                alert_payload = {
+                                    "type": "CROSS_ALERT",
+                                    "symbol": symbol,
+                                    "current_price": current_price,
+                                    "strategy_id": strat_id,
+                                    "strategy_name": strat_name,
+                                    "evaluation": eval_result,
+                                    "is_alert": True
+                                }
+                                if connected_clients:
+                                    msg_str = json.dumps(alert_payload)
+                                    for client in list(connected_clients):
+                                        try:
+                                            await client.send_text(msg_str)
+                                        except Exception:
+                                            pass
+                
+                # Automatic cleanup of stale or price-invalidated tickets
+                exist_t = last_valid_tickets.get(symbol)
+                if exist_t:
+                    t_age = time.time() - exist_t.get("created_at", exist_t.get("timestamp", time.time()))
+                    t_entry = float(exist_t.get("Entry Price") or exist_t.get("Entry") or 0)
+                    t_sl = float(exist_t.get("Stop Loss") or 0)
+                    t_tp = float(exist_t.get("Take Profit") or 0)
+                    is_buy = "BUY" in str(exist_t.get("Order Type", "")).upper()
+                    
+                    is_stale = (t_age > 1200)  # Expire tickets older than 20 minutes
+                    if current_price > 0 and t_sl > 0 and t_tp > 0:
+                        if is_buy and (current_price <= t_sl or current_price >= t_tp):
+                            is_stale = True
+                        elif not is_buy and (current_price >= t_sl or current_price <= t_tp):
+                            is_stale = True
+                        max_dist = 40.0 if symbol == "GOLD" else 200.0
+                        if abs(current_price - t_entry) > max_dist:
+                            is_stale = True
+                            
+                    # Invalidation from strategy itself
+                    if exist_t.get("strategy_id") == active_strat:
+                        act_eval = all_evals.get(active_strat, {})
+                        if act_eval.get("decision") == "Wait / No trade" and act_eval.get("order_ticket") is None:
+                            if (is_buy and current_price <= t_sl) or (not is_buy and current_price >= t_sl) or (t_age > 300):
+                                is_stale = True
+
+                    if is_stale:
+                        del last_valid_tickets[symbol]
                 
                 # If this is the active symbol being viewed on screen, broadcast its active strategy update
                 if symbol == active_sym:

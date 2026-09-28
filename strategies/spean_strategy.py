@@ -239,12 +239,21 @@ class SPEANStrategy(BaseStrategy):
                 "order_ticket": None
             }
 
-        # Stand aside if BOS or POI mitigation incomplete
+        # Stand aside if BOS or POI mitigation incomplete, or outside Q-Zone, or FAH confluence < 6
         if not (has_bos and is_mitigated and protected_level):
             return {
                 "strategy": self.name,
                 "decision": "Wait / No trade",
                 "reason": "Liquidity swept! Waiting for complete 1M sequence: BOS -> Protected Level -> POI Mitigation.",
+                "checklist": checklist,
+                "order_ticket": None
+            }
+
+        if not q_info["is_active"] or passed_count < 6:
+            return {
+                "strategy": self.name,
+                "decision": "Wait / No trade",
+                "reason": f"Waiting for active Q-Zone and FAH confluence (currently {fah_str}).",
                 "checklist": checklist,
                 "order_ticket": None
             }
@@ -267,12 +276,23 @@ class SPEANStrategy(BaseStrategy):
             tp_dist = abs(tp - entry)
             rr = tp_dist / sl_dist if sl_dist > 0 else 0
 
+            # Invalidation check: price already breached SL or reached target
+            if current_price <= sl or (current_price >= tp and tp > entry):
+                return {
+                    "strategy": self.name,
+                    "decision": "Wait / No trade",
+                    "reason": f"Price breached protected low ({sl}) or reached target ({tp}). Setup invalidated.",
+                    "checklist": checklist,
+                    "order_ticket": None
+                }
+
             if rr >= min_rr:
                 decision = "Buy limit"
                 reason = f"SPEAN Long Setup Confirmed ({fah_str}). SSL taken -> Protected Low held -> 1M BOS -> POI Mitigated. 1:{round(rr, 2)} R:R."
                 order_ticket = build_order_ticket(
                     order_type="BUY LIMIT",
                     symbol=symbol,
+                    strategy_name=self.name,
                     entry_price=entry,
                     stop_loss=sl,
                     take_profit=tp,
@@ -291,12 +311,23 @@ class SPEANStrategy(BaseStrategy):
             tp_dist = abs(entry - tp)
             rr = tp_dist / sl_dist if sl_dist > 0 else 0
 
+            # Invalidation check: price already breached SL or reached target
+            if current_price >= sl or (current_price <= tp and tp < entry):
+                return {
+                    "strategy": self.name,
+                    "decision": "Wait / No trade",
+                    "reason": f"Price breached protected high ({sl}) or reached target ({tp}). Setup invalidated.",
+                    "checklist": checklist,
+                    "order_ticket": None
+                }
+
             if rr >= min_rr:
                 decision = "Sell limit"
                 reason = f"SPEAN Short Setup Confirmed ({fah_str}). BSL taken -> Protected High held -> 1M BOS -> POI Mitigated. 1:{round(rr, 2)} R:R."
                 order_ticket = build_order_ticket(
                     order_type="SELL LIMIT",
                     symbol=symbol,
+                    strategy_name=self.name,
                     entry_price=entry,
                     stop_loss=sl,
                     take_profit=tp,

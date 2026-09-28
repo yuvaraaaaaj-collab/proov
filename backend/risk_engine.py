@@ -86,6 +86,8 @@ def build_order_ticket(
     entry: Optional[float] = None,
     risk_dollars: Optional[float] = None,
     cancel_condition: Optional[str] = None,
+    strategy_name: Optional[str] = None,
+    strategy: Optional[str] = None,
     **kwargs: Any
 ) -> Optional[Dict[str, Any]]:
     """
@@ -94,6 +96,7 @@ def build_order_ticket(
     Supports flexible keyword arguments and aliases.
     """
     # Resolve aliases
+    strat = strategy_name or strategy or kwargs.get("strategy_id", "TraderPro Strategy")
     if order_type is None:
         order_type = f"{direction.upper()} LIMIT" if direction else "LIMIT"
     if entry_price is None:
@@ -126,6 +129,8 @@ def build_order_ticket(
     ticket: Dict[str, Any] = {
         "Order Type": order_type.upper(),
         "Instrument": symbol.upper(),
+        "Strategy": strat,
+        "strategy": strat,
         "Entry Price": entry_val,
         "Stop Loss": sl,
         "Take Profit": tp,

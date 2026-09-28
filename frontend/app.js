@@ -283,35 +283,37 @@ function renderMarketUpdate(data) {
 
   // 4. Order Ticket Card (Persistent & Constant across updates, with auto-expiration)
   const orderCard = document.getElementById('order-card');
-  let rawStoredTicket = (data.last_valid_ticket && data.last_valid_ticket.symbol === data.symbol ? data.last_valid_ticket : null) 
-    || lastAlertTicket 
-    || JSON.parse(localStorage.getItem('traderpro_last_ticket_' + data.symbol) || 'null');
-
-  // If a fresh ticket just arrived from strategy evaluation
-  let displayTicket = null;
   const isCurrentFresh = Boolean(ticket && (ticket['Entry Price'] || ticket['Entry']) && ticket['Stop Loss'] && ticket['Stop Loss'] !== '---');
 
+  let displayTicket = null;
   if (isCurrentFresh) {
     displayTicket = {
       ...ticket,
-      strategy: ticket.strategy || evalData.strategy || data.strategy_name || data.strategy_id || 'Active Strategy',
+      strategy: ticket.strategy || ticket.Strategy || evalData.strategy || data.strategy_name || data.strategy_id || 'Active Strategy',
       symbol: data.symbol,
       timestamp: ticket.timestamp || (Date.now() / 1000)
     };
-  } else if (rawStoredTicket && rawStoredTicket.symbol === data.symbol) {
-    displayTicket = rawStoredTicket;
+  } else if (data.last_valid_ticket && data.last_valid_ticket.symbol === data.symbol) {
+    displayTicket = data.last_valid_ticket;
+  } else {
+    // Backend has cleared the ticket (invalidated, SL/TP hit, or session expired)
+    displayTicket = null;
+    lastAlertTicket = null;
+    localStorage.removeItem('traderpro_last_ticket_' + data.symbol);
+    if (orderCard) {
+      orderCard.classList.add('hidden');
+    }
   }
 
   // Validate freshness and price bounds:
-  // Invalidate if older than 25 minutes, or price moved past SL/TP, or price is > 200 pts away (40 for GOLD)
+  // Invalidate if older than 20 minutes, or price moved past SL/TP, or price is > 200 pts away (40 for GOLD)
   if (displayTicket) {
     let isStale = false;
     const nowSec = Date.now() / 1000;
-    const ticketTime = displayTicket.timestamp || 0;
+    const ticketTime = displayTicket.created_at || displayTicket.timestamp || 0;
     const ageSeconds = nowSec - ticketTime;
 
-    // If ticket has no timestamp (e.g. legacy stored ticket from prior session) or age > 25 mins (1500s)
-    if (!ticketTime || ageSeconds > 1500) {
+    if (!ticketTime || ageSeconds > 1200) {
       isStale = true;
     }
 
@@ -336,6 +338,9 @@ function renderMarketUpdate(data) {
       displayTicket = null;
       lastAlertTicket = null;
       localStorage.removeItem('traderpro_last_ticket_' + data.symbol);
+      if (orderCard) {
+        orderCard.classList.add('hidden');
+      }
     }
   }
 

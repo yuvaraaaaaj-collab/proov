@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import asyncio
+import datetime
 import urllib.parse
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -11,6 +12,15 @@ try:
     HAS_HTTPX = True
 except ImportError:
     HAS_HTTPX = False
+
+try:
+    import zoneinfo
+    IST_TZ = zoneinfo.ZoneInfo("Asia/Kolkata")
+    EST_TZ = zoneinfo.ZoneInfo("America/New_York")
+except Exception:
+    import pytz
+    IST_TZ = pytz.timezone("Asia/Kolkata")
+    EST_TZ = pytz.timezone("America/New_York")
 
 logger = logging.getLogger("notifier")
 
@@ -43,15 +53,32 @@ def load_alert_settings() -> Dict[str, Any]:
     global _cached_settings
     if _cached_settings is not None:
         return _cached_settings
+    loaded = DEFAULT_SETTINGS.copy()
     if SETTINGS_FILE.exists():
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                _cached_settings = {**DEFAULT_SETTINGS, **data}
-                return _cached_settings
+                loaded.update(data)
         except Exception as e:
             logger.error(f"Error loading alert settings: {e}")
-    _cached_settings = DEFAULT_SETTINGS.copy()
+
+    # Fallback to Environment Variables (vital for Railway persistence across restarts)
+    env_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if env_token:
+        loaded["telegram_bot_token"] = env_token
+        loaded["telegram_enabled"] = True
+    env_chat_ids = os.environ.get("TELEGRAM_CHAT_IDS")
+    if env_chat_ids:
+        if env_chat_ids.startswith("["):
+            try:
+                loaded["telegram_chat_ids"] = json.loads(env_chat_ids)
+            except Exception:
+                loaded["telegram_chat_ids"] = [c.strip() for c in env_chat_ids.split(",") if c.strip()]
+        else:
+            loaded["telegram_chat_ids"] = [c.strip() for c in env_chat_ids.split(",") if c.strip()]
+        loaded["telegram_enabled"] = True
+
+    _cached_settings = loaded
     return _cached_settings
 
 def save_alert_settings(settings: Dict[str, Any]) -> bool:
@@ -77,6 +104,9 @@ def format_telegram_message(symbol: str, strategy_name: str, eval_data: Dict[str
     gain = ticket.get("Projected Profit", "---")
     reason = eval_data.get("reason", "")
     
+    now_ist = datetime.datetime.now(IST_TZ).strftime("%I:%M:%S %p IST")
+    now_est = datetime.datetime.now(EST_TZ).strftime("%I:%M:%S %p EST")
+
     emoji = "🟢" if "buy" in decision.lower() else "🔴"
 
     msg = (
@@ -84,6 +114,7 @@ def format_telegram_message(symbol: str, strategy_name: str, eval_data: Dict[str
         f"<b>Asset:</b> {symbol} (Capital.com)\n"
         f"<b>Strategy:</b> {strategy_name}\n"
         f"<b>Live Price:</b> {current_price}\n"
+        f"⏰ <b>Signal Time:</b> <code>{now_ist} ({now_est})</code>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"🎯 <b>Entry:</b> <code>{entry}</code>\n"
         f"🛑 <b>Stop Loss:</b> <code>{sl}</code>\n"

@@ -23,7 +23,7 @@ class PraveenStrategy(BaseStrategy):
     Max Trades: 3/day (1 per session).
     
     The 5-Step Entry Flow (Auto-Detection Logic):
-      1. BIAS — Higher Timeframe Direction (W -> D -> 4H -> 1H) + Midnight Open
+      1. BIAS — Higher Timeframe Direction (Weekly -> Daily -> 4H -> 1H) + Midnight Open
       2. DOL — Draw on Liquidity (BSL / SSL / EQH / EQL / PDH / PDL / PWH / PWL)
       3. IRL — Find the Entry Zone (30min primary, 15min secondary FVG / OB)
       4. ENTRY — 1min CISD + IFVG Confirmation:
@@ -33,6 +33,7 @@ class PraveenStrategy(BaseStrategy):
       5. SL & TP Placement (C.E. 50% entry, Stop at CISD swing, 1:2+ R:R)
       + SMT & SSMT (Quarterly Theory 90-min cycles: Q1, Q2, Q3, Q4)
       + Setup Grade: A+ (Execute Now), A (Execute), B (Proceed with caution), C (Do Not Trade)
+      + Strict Invalidation Rule: Price closes beyond swing extreme that created CISD.
     """
 
     def __init__(self):
@@ -44,11 +45,11 @@ class PraveenStrategy(BaseStrategy):
     def _get_session_and_killzones(self) -> Dict[str, Any]:
         """
         Kill Zones & Session Windows (All Times IST / EST per Page 1):
-          - Asian KZ: 5:30 AM – 9:30 AM IST (8:00 PM – 12:00 AM EST) -> Accumulation
-          - London KZ: 11:30 AM – 2:30 PM IST (2:00 AM – 5:00 AM EST) -> Manipulation (Judas Swing)
-          - NY KZ: 4:30 PM – 7:30 PM IST (7:00 AM – 10:00 AM EST) -> Distribution/Expansion
-          - NY Silver Bullet: 7:30 PM – 8:30 PM IST (10:00 AM – 11:00 AM EST) -> Precision Scalp
-          - NY Macro Window: 7:20 PM – 7:40 PM IST (9:50 AM – 10:10 AM EST) -> Algorithmic Injection
+          - Asian KZ: 5:30 AM – 9:30 AM IST (8:00 PM – 12:00 AM EDT) -> Accumulation
+          - London KZ: 11:30 AM – 2:30 PM IST (2:00 AM – 5:00 AM EDT) -> Manipulation (Judas Swing)
+          - NY KZ: 4:30 PM – 7:30 PM IST (7:00 AM – 10:00 AM EDT) -> Distribution/Expansion (NY Open 7:00 PM IST / 9:30 AM EDT)
+          - NY Silver Bullet: 7:30 PM – 8:30 PM IST (10:00 AM – 11:00 AM EDT) -> Precision Scalp
+          - NY Macro Window: 7:20 PM – 7:40 PM IST (9:50 AM – 10:10 AM EDT) -> Algorithmic Injection
         """
         now_ist = datetime.datetime.now(IST_TZ)
         now_est = datetime.datetime.now(EST_TZ)
@@ -362,7 +363,7 @@ class PraveenStrategy(BaseStrategy):
     def _find_30m_pd_arrays(self, c_30m: list, dec: int) -> Dict[str, list]:
         """
         Step 3: IRL — Find the Entry Zone (30min / 15min PD Arrays) (Page 3).
-        Finds all active Bullish and Bearish FVGs and Order Blocks (OB).
+        Finds all active Bullish and Bearish FVGs and Order Blocks (OB) on recent 30M candles.
         Includes Consequent Encroachment (C.E. = 50% midpoint).
         """
         bullish_fvgs = []
@@ -373,10 +374,13 @@ class PraveenStrategy(BaseStrategy):
         if len(c_30m) < 3:
             return {"bull_fvgs": [], "bear_fvgs": [], "bull_obs": [], "bear_obs": []}
 
+        # Focus on recent 25 30-minute bars (recent swing context)
+        lookback = c_30m[-25:] if len(c_30m) >= 25 else c_30m
+
         # 1. 30min FVG Detection: Candle 1 High < Candle 3 Low (Bullish) or Candle 1 Low > Candle 3 High (Bearish)
-        for i in range(1, len(c_30m) - 1):
-            c_prev = c_30m[i-1]
-            c_next = c_30m[i+1]
+        for i in range(1, len(lookback) - 1):
+            c_prev = lookback[i-1]
+            c_next = lookback[i+1]
             # Bullish FVG
             if c_prev['high'] < c_next['low']:
                 top = round(c_next['low'], dec)
@@ -403,9 +407,9 @@ class PraveenStrategy(BaseStrategy):
                 })
 
         # 2. 30min Order Block Detection: Last bearish candle before bullish displacement with FVG
-        for i in range(1, len(c_30m) - 2):
-            c_cur = c_30m[i]
-            c_disp = c_30m[i+1]
+        for i in range(1, len(lookback) - 2):
+            c_cur = lookback[i]
+            c_disp = lookback[i+1]
             if c_cur['close'] < c_cur['open'] and c_disp['close'] > c_cur['high']:
                 top = round(c_cur['high'], dec)
                 bottom = round(c_cur['low'], dec)
@@ -447,13 +451,11 @@ class PraveenStrategy(BaseStrategy):
 
         blockers = []
         if is_bullish:
-            # Check 30m bearish FVGs and OBs between entry_price and dol_price
             all_bear = pd_arrays.get("bear_fvgs", []) + pd_arrays.get("bear_obs", [])
             for arr in all_bear:
                 if arr["bottom"] > entry_price and arr["top"] < dol_price:
                     blockers.append(arr)
         else:
-            # Check 30m bullish FVGs and OBs between entry_price and dol_price
             all_bull = pd_arrays.get("bull_fvgs", []) + pd_arrays.get("bull_obs", [])
             for arr in all_bull:
                 if arr["top"] < entry_price and arr["bottom"] > dol_price:
@@ -475,143 +477,200 @@ class PraveenStrategy(BaseStrategy):
 
     def _detect_1m_cisd(self, c_1m: list, pd_array_zone: dict, is_bullish: bool, dec: int) -> Dict[str, Any]:
         """
-        Step 4B: CISD — Change in State of Delivery (Page 3).
+        Step 4B: CISD — Change in State of Delivery (Page 3 of Guide).
         Faster than MSS. Detects institutional order flow flip on 1min.
         Logic:
-          1. Find consecutive delivery candles that drove price into the PD array.
+          1. Find consecutive delivery candles in recent 25 bars that drove price into the PD array.
           2. Mark opening price of FIRST candle in that run (run_start).
-          3. When a new 1M candle CLOSES above/below that opening price -> CISD confirmed!
+          3. When a subsequent 1M candle CLOSES above/below that opening price -> CISD confirmed!
+          4. Record the swing extreme (lowest low for bullish, highest high for bearish) that formed during the run.
+          5. Invalidation Check (Page 6): If any subsequent candle closes beyond that swing extreme, CISD is invalidated!
         """
-        if len(c_1m) < 4 or not pd_array_zone:
-            return {"cisd": False, "level": None, "swing_extreme": None, "label": "WAITING for 1M Candles"}
+        if len(c_1m) < 6 or not pd_array_zone:
+            return {"cisd": False, "level": None, "swing_extreme": None, "invalidated": False, "label": "WAITING for 1M Candles"}
 
-        lookback = c_1m[-25:] if len(c_1m) >= 25 else c_1m
+        lookback = c_1m[-25:]
+        top = pd_array_zone.get("top", float("inf"))
+        bottom = pd_array_zone.get("bottom", 0.0)
 
         if is_bullish:
-            # Bearish run driving down into PD array
             bearish_run_start = None
             in_bearish_run = False
-            swing_low = min([c['low'] for c in lookback])
+            swing_low = float("inf")
+            cisd_found = False
+            cisd_bar_idx = -1
 
             for i, c in enumerate(lookback):
-                if c['close'] < c['open'] and c['low'] > pd_array_zone.get("bottom", 0):
+                if c['close'] < c['open'] and c['low'] > bottom:
                     if not in_bearish_run:
                         bearish_run_start = c['open']
                         in_bearish_run = True
-                elif in_bearish_run and c['low'] <= pd_array_zone.get("top", float("inf")):
-                    # Price entered PD array - watch for close above bearish_run_start
-                    if c['close'] > bearish_run_start:
-                        return {
-                            "cisd": True,
-                            "level": round(bearish_run_start, dec),
-                            "swing_extreme": round(swing_low, dec),
-                            "label": f"CONFIRMED (Closed above delivery open {round(bearish_run_start, dec)})"
-                        }
-            # Also check if latest candle closed above any intermediate swing high
-            swing_highs = [lookback[i]['high'] for i in range(1, len(lookback)-1) if lookback[i]['high'] >= lookback[i-1]['high'] and lookback[i]['high'] >= lookback[i+1]['high']]
-            if swing_highs and lookback[-1]['close'] > swing_highs[-1]:
+                elif in_bearish_run and c['low'] <= top:
+                    swing_low = min(swing_low, c['low'])
+                    if bearish_run_start is not None and c['close'] > bearish_run_start:
+                        cisd_found = True
+                        cisd_bar_idx = i
+                        break
+                elif in_bearish_run:
+                    swing_low = min(swing_low, c['low'])
+
+            if not cisd_found:
+                # Also check 1M swing high break after tapping PD array
+                for i in range(len(lookback) - 6, len(lookback) - 1):
+                    if i > 0 and lookback[i]['high'] >= lookback[i-1]['high'] and lookback[i]['high'] >= lookback[i+1]['high']:
+                        if lookback[-1]['close'] > lookback[i]['high']:
+                            swing_low = min(c['low'] for c in lookback[i-3:])
+                            cisd_found = True
+                            bearish_run_start = lookback[i]['high']
+                            cisd_bar_idx = len(lookback) - 1
+                            break
+
+            if cisd_found and bearish_run_start is not None:
+                if swing_low == float("inf"):
+                    swing_low = min(c['low'] for c in lookback)
+
+                # Invalidation Rule (Page 6): Price closes candle body below swing low that created CISD
+                candles_after = lookback[cisd_bar_idx:]
+                if any(c['close'] < swing_low for c in candles_after):
+                    return {
+                        "cisd": False,
+                        "level": None,
+                        "swing_extreme": round(swing_low, dec),
+                        "invalidated": True,
+                        "label": f"INVALIDATED (Candle closed below CISD swing low {round(swing_low, dec)})"
+                    }
+
                 return {
                     "cisd": True,
-                    "level": round(swing_highs[-1], dec),
+                    "level": round(bearish_run_start, dec),
                     "swing_extreme": round(swing_low, dec),
-                    "label": f"CONFIRMED (Closed above 1M Swing High {round(swing_highs[-1], dec)})"
+                    "invalidated": False,
+                    "label": f"CONFIRMED (Closed above delivery open {round(bearish_run_start, dec)})"
                 }
 
         else:
-            # Bullish run driving up into PD array
             bullish_run_start = None
             in_bullish_run = False
-            swing_high = max([c['high'] for c in lookback])
+            swing_high = float("-inf")
+            cisd_found = False
+            cisd_bar_idx = -1
 
             for i, c in enumerate(lookback):
-                if c['close'] > c['open'] and c['high'] < pd_array_zone.get("top", float("inf")):
+                if c['close'] > c['open'] and c['high'] < top:
                     if not in_bullish_run:
                         bullish_run_start = c['open']
                         in_bullish_run = True
-                elif in_bullish_run and c['high'] >= pd_array_zone.get("bottom", 0):
-                    # Price entered PD array - watch for close below bullish_run_start
-                    if c['close'] < bullish_run_start:
-                        return {
-                            "cisd": True,
-                            "level": round(bullish_run_start, dec),
-                            "swing_extreme": round(swing_high, dec),
-                            "label": f"CONFIRMED (Closed below delivery open {round(bullish_run_start, dec)})"
-                        }
-            swing_lows = [lookback[i]['low'] for i in range(1, len(lookback)-1) if lookback[i]['low'] <= lookback[i-1]['low'] and lookback[i]['low'] <= lookback[i+1]['low']]
-            if swing_lows and lookback[-1]['close'] < swing_lows[-1]:
+                elif in_bullish_run and c['high'] >= bottom:
+                    swing_high = max(swing_high, c['high'])
+                    if bullish_run_start is not None and c['close'] < bullish_run_start:
+                        cisd_found = True
+                        cisd_bar_idx = i
+                        break
+                elif in_bullish_run:
+                    swing_high = max(swing_high, c['high'])
+
+            if not cisd_found:
+                # 1M swing low break after tapping PD array
+                for i in range(len(lookback) - 6, len(lookback) - 1):
+                    if i > 0 and lookback[i]['low'] <= lookback[i-1]['low'] and lookback[i]['low'] <= lookback[i+1]['low']:
+                        if lookback[-1]['close'] < lookback[i]['low']:
+                            swing_high = max(c['high'] for c in lookback[i-3:])
+                            cisd_found = True
+                            bullish_run_start = lookback[i]['low']
+                            cisd_bar_idx = len(lookback) - 1
+                            break
+
+            if cisd_found and bullish_run_start is not None:
+                if swing_high == float("-inf"):
+                    swing_high = max(c['high'] for c in lookback)
+
+                # Invalidation Rule (Page 6): Price closes candle body above swing high that created CISD
+                candles_after = lookback[cisd_bar_idx:]
+                if any(c['close'] > swing_high for c in candles_after):
+                    return {
+                        "cisd": False,
+                        "level": None,
+                        "swing_extreme": round(swing_high, dec),
+                        "invalidated": True,
+                        "label": f"INVALIDATED (Candle closed above CISD swing high {round(swing_high, dec)})"
+                    }
+
                 return {
                     "cisd": True,
-                    "level": round(swing_lows[-1], dec),
+                    "level": round(bullish_run_start, dec),
                     "swing_extreme": round(swing_high, dec),
-                    "label": f"CONFIRMED (Closed below 1M Swing Low {round(swing_lows[-1], dec)})"
+                    "invalidated": False,
+                    "label": f"CONFIRMED (Closed below delivery open {round(bullish_run_start, dec)})"
                 }
 
         return {
             "cisd": False,
             "level": None,
             "swing_extreme": None,
+            "invalidated": False,
             "label": "WAITING (Institutional order flow not flipped)"
         }
 
     def _detect_1m_ifvg(self, c_1m: list, is_bullish: bool, dec: int) -> Dict[str, Any]:
         """
-        Step 4C: IFVG — Inversion Fair Value Gap (Page 4).
-        A 1min opposing FVG that price breaks through with full candle bodies and retests as support/resistance.
+        Step 4C: IFVG — Inversion Fair Value Gap (Page 4 of Guide).
+        A 1min opposing FVG formed in recent 20 bars that price breaks through with
+        candle body closes and retests as support (longs) or resistance (shorts).
         """
         if len(c_1m) < 6:
-            return {"ifvg": False, "level": None, "ce": None, "label": "WAITING for 1M FVGs"}
+            return {"ifvg": False, "level": None, "ce": None, "label": "WAITING for 1M Candles"}
 
-        recent_5 = c_1m[-6:]
+        recent_window = c_1m[-20:]
+        recent_5 = recent_window[-5:]
 
         if is_bullish:
-            # Look for 1min Bearish FVGs inverted upward
-            for i in range(1, len(c_1m) - 2):
-                c_prev = c_1m[i-1]
-                c_next = c_1m[i+1]
+            # Bearish FVGs formed in recent 20 bars inverted upward
+            # Scan in reverse (most recent first)
+            for i in range(len(recent_window) - 3, 0, -1):
+                c_prev = recent_window[i-1]
+                c_next = recent_window[i+1]
                 if c_prev['low'] > c_next['high']:
                     top = round(c_prev['low'], dec)
                     bottom = round(c_next['high'], dec)
                     ce = round((top + bottom) / 2, dec)
-                    
-                    # Broke above top with candle close?
+
+                    # Page 4 rule: broke_above with candle close & retested as support
                     broke_above = any(c['close'] > top for c in recent_5)
-                    # Retested as support?
-                    retested = any(c['low'] <= top and c['close'] >= bottom for c in recent_5)
+                    retested = any(c['low'] <= top and c['close'] >= top for c in recent_5)
+
                     if broke_above and retested:
                         return {
                             "ifvg": True,
                             "level": top,
                             "ce": ce,
-                            "label": f"CONFIRMED (Inverted Bearish FVG [{bottom}-{top}] Retested)"
+                            "top": top,
+                            "bottom": bottom,
+                            "label": f"CONFIRMED (Inverted Bearish FVG [{bottom}-{top}] Retested as Support)"
                         }
         else:
-            # Look for 1min Bullish FVGs inverted downward
-            for i in range(1, len(c_1m) - 2):
-                c_prev = c_1m[i-1]
-                c_next = c_1m[i+1]
+            # Bullish FVGs formed in recent 20 bars inverted downward
+            for i in range(len(recent_window) - 3, 0, -1):
+                c_prev = recent_window[i-1]
+                c_next = recent_window[i+1]
                 if c_prev['high'] < c_next['low']:
                     top = round(c_next['low'], dec)
                     bottom = round(c_prev['high'], dec)
                     ce = round((top + bottom) / 2, dec)
 
                     broke_below = any(c['close'] < bottom for c in recent_5)
-                    retested = any(c['high'] >= bottom and c['close'] <= top for c in recent_5)
+                    retested = any(c['high'] >= bottom and c['close'] <= bottom for c in recent_5)
+
                     if broke_below and retested:
                         return {
                             "ifvg": True,
                             "level": bottom,
                             "ce": ce,
-                            "label": f"CONFIRMED (Inverted Bullish FVG [{bottom}-{top}] Retested)"
+                            "top": top,
+                            "bottom": bottom,
+                            "label": f"CONFIRMED (Inverted Bullish FVG [{bottom}-{top}] Retested as Resistance)"
                         }
 
         return {"ifvg": False, "level": None, "ce": None, "label": "WAITING (No Inversion Retested)"}
-
-    def _check_smt(self, c_1m_primary: list, c_1m_corr: list, symbol: str = "NAS100") -> Dict[str, Any]:
-        """
-        Step 5: SMT Divergence (Page 5).
-        Delegates to shared smt_engine using swing-point + timestamp-tolerance detection.
-        """
-        return check_smt_divergence(c_1m_primary, c_1m_corr, symbol=symbol)
 
     def _check_ote(self, pd_array: dict, c_30m: list) -> bool:
         """
@@ -640,7 +699,6 @@ class PraveenStrategy(BaseStrategy):
         c_4h = market_data.get("candles_4h", [])
         c_1d = market_data.get("candles_1d", [])
         c_1w = market_data.get("candles_1w", [])
-        c_corr = market_data.get("correlated_candles_1m", [])
 
         dec = 2 if "gold" in symbol.lower() else 1
 
@@ -653,7 +711,7 @@ class PraveenStrategy(BaseStrategy):
                 "order_ticket": None
             }
 
-        # Midnight Open reference price (00:00 EST / 9:30 AM IST)
+        # Midnight Open reference price (00:00 EST / 9:30 AM IST) (Page 1 & 2)
         midnight_open = None
         for c in reversed(c_1h[-48:]):
             dt = datetime.datetime.fromtimestamp(c['timestamp'], tz=EST_TZ)
@@ -680,26 +738,27 @@ class PraveenStrategy(BaseStrategy):
 
         # 4. 30min PD Arrays & Tapped Rule (Page 3 - Authentic 30M Candles)
         pd_arrays = self._find_30m_pd_arrays(c_30m, dec)
-        
-        # Pick relevant 30M array based on bias
         active_pd_array = None
         req_4_array_tapped = False
         tapped_label = "Scanning 30M PD Arrays"
 
         if is_bullish:
-            candidates = [a for a in pd_arrays["bull_fvgs"] + pd_arrays["bull_obs"] if a["bottom"] <= current_price]
+            candidates = [a for a in pd_arrays["bull_fvgs"] + pd_arrays["bull_obs"] if a["bottom"] <= current_price * 1.005]
             if candidates:
                 active_pd_array = min(candidates, key=lambda x: abs(x["ce"] - current_price))
-                # Tapped rule: price within bottom and top or recent 1M low tapped into it
-                recent_1m_low = min([c['low'] for c in c_1m[-20:]])
-                req_4_array_tapped = (current_price >= active_pd_array["bottom"] and current_price <= active_pd_array["top"]) or (recent_1m_low <= active_pd_array["top"])
+                recent_1m_low = min([c['low'] for c in c_1m[-15:]])
+                in_zone = (current_price >= active_pd_array["bottom"] and current_price <= active_pd_array["top"])
+                tapped_recently = (recent_1m_low <= active_pd_array["top"] and current_price >= active_pd_array["bottom"] * 0.998)
+                req_4_array_tapped = in_zone or tapped_recently
                 tapped_label = f"TAPPED [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]" if req_4_array_tapped else f"WAITING for Tap [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]"
         elif is_bearish:
-            candidates = [a for a in pd_arrays["bear_fvgs"] + pd_arrays["bear_obs"] if a["top"] >= current_price]
+            candidates = [a for a in pd_arrays["bear_fvgs"] + pd_arrays["bear_obs"] if a["top"] >= current_price * 0.995]
             if candidates:
                 active_pd_array = min(candidates, key=lambda x: abs(x["ce"] - current_price))
-                recent_1m_high = max([c['high'] for c in c_1m[-20:]])
-                req_4_array_tapped = (current_price <= active_pd_array["top"] and current_price >= active_pd_array["bottom"]) or (recent_1m_high >= active_pd_array["bottom"])
+                recent_1m_high = max([c['high'] for c in c_1m[-15:]])
+                in_zone = (current_price <= active_pd_array["top"] and current_price >= active_pd_array["bottom"])
+                tapped_recently = (recent_1m_high >= active_pd_array["bottom"] and current_price <= active_pd_array["top"] * 1.002)
+                req_4_array_tapped = in_zone or tapped_recently
                 tapped_label = f"TAPPED [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]" if req_4_array_tapped else f"WAITING for Tap [{active_pd_array['type']} {active_pd_array['bottom']}-{active_pd_array['top']}]"
 
         # 5. LRLR Path Clear Check (Page 3)
@@ -707,11 +766,15 @@ class PraveenStrategy(BaseStrategy):
         req_5_lrlr_clear = lrlr_info["is_lrlr"]
 
         # 6. 1min CISD Confirmed (Page 3)
-        cisd_info = self._detect_1m_cisd(c_1m, active_pd_array, is_bullish, dec) if req_4_array_tapped else {"cisd": False, "level": None, "swing_extreme": None, "label": "WAITING (30M array not tapped)"}
-        req_6_cisd_confirmed = cisd_info["cisd"]
+        cisd_info = self._detect_1m_cisd(c_1m, active_pd_array, is_bullish, dec) if req_4_array_tapped else {
+            "cisd": False, "level": None, "swing_extreme": None, "invalidated": False, "label": "WAITING (30M array not tapped)"
+        }
+        req_6_cisd_confirmed = cisd_info["cisd"] and not cisd_info.get("invalidated", False)
 
         # 7. 1min IFVG Confirmed (Page 4)
-        ifvg_info = self._detect_1m_ifvg(c_1m, is_bullish, dec) if req_4_array_tapped else {"ifvg": False, "level": None, "ce": None, "label": "WAITING (30M array not tapped)"}
+        ifvg_info = self._detect_1m_ifvg(c_1m, is_bullish, dec) if req_4_array_tapped else {
+            "ifvg": False, "level": None, "ce": None, "label": "WAITING (30M array not tapped)"
+        }
         req_7_ifvg_confirmed = ifvg_info["ifvg"]
 
         # 8. Minimum 1:2 R:R (Page 4)
@@ -720,14 +783,16 @@ class PraveenStrategy(BaseStrategy):
         buf = sl_buffer(symbol)
         min_rr = account_config.get("min_rr", MIN_RR)
 
+        cisd_extreme = cisd_info.get("swing_extreme") or current_price
+
         if is_bullish:
-            sl_price = round((cisd_info.get("swing_extreme") or current_price) - buf, dec)
+            sl_price = round(cisd_extreme - buf, dec)
             sl_dist = abs(entry_price - sl_price)
             tp_price = round(entry_price + sl_dist * 2.0, dec)
             if dol_target and dol_target > tp_price:
                 tp_price = round(dol_target, dec)
         else:
-            sl_price = round((cisd_info.get("swing_extreme") or current_price) + buf, dec)
+            sl_price = round(cisd_extreme + buf, dec)
             sl_dist = abs(sl_price - entry_price)
             tp_price = round(entry_price - sl_dist * 2.0, dec)
             if dol_target and dol_target < tp_price:
@@ -736,7 +801,27 @@ class PraveenStrategy(BaseStrategy):
         calculated_rr = abs(tp_price - entry_price) / max(0.1, sl_dist)
         req_8_rr_valid = (calculated_rr >= (min_rr - 0.05))
 
-        # 4 BONUS Criteria (Page 5) - Integrated with shared smt_engine (#10)
+        # Invalidation Check (Page 6: Cancel If: Price closes a candle body beyond swing extreme that created CISD)
+        is_invalidated = False
+        invalidation_reason = ""
+
+        if cisd_info.get("invalidated"):
+            is_invalidated = True
+            invalidation_reason = cisd_info.get("label", "CISD swing extreme breached.")
+        elif is_bullish and current_price <= sl_price:
+            is_invalidated = True
+            invalidation_reason = f"Price breached Stop Loss ({sl_price}). Setup invalidated."
+        elif is_bearish and current_price >= sl_price:
+            is_invalidated = True
+            invalidation_reason = f"Price breached Stop Loss ({sl_price}). Setup invalidated."
+        elif is_bullish and current_price >= tp_price and tp_price > entry_price:
+            is_invalidated = True
+            invalidation_reason = f"Target already reached ({tp_price}). Setup completed."
+        elif is_bearish and current_price <= tp_price and tp_price < entry_price:
+            is_invalidated = True
+            invalidation_reason = f"Target already reached ({tp_price}). Setup completed."
+
+        # 4 BONUS Criteria (Page 5) - Integrated with shared smt_engine
         c_corr_1m = market_data.get("correlated_candles_1m", [])
         c_corr_5m = market_data.get("correlated_candles_5m", [])
         corr_sym = market_data.get("correlated_symbol", "")
@@ -760,7 +845,11 @@ class PraveenStrategy(BaseStrategy):
         req_count = sum(1 for r in required_list if r)
         bonus_count = sum(1 for b in bonus_list if b)
 
-        if req_count == 8 and bonus_count >= 3:
+        if is_invalidated:
+            grade = "C"
+            action = "DO NOT TRADE"
+            size = "Skip entirely"
+        elif req_count == 8 and bonus_count >= 3:
             grade = "A+"
             action = "EXECUTE NOW"
             size = "Full Size (100%)"
@@ -784,7 +873,7 @@ class PraveenStrategy(BaseStrategy):
             "3. Draw on Liquidity (DOL)": f"{'PASS' if req_3_dol_identified else 'FAIL'} ({dol_info['label']})",
             "4. 30min PD Array Tapped": f"{'PASS' if req_4_array_tapped else 'WAITING'} ({tapped_label})",
             "5. LRLR Path Clear": f"{'PASS' if req_5_lrlr_clear else 'FAIL'} ({lrlr_info['label']})",
-            "6. 1min CISD Confirmed": f"{'CONFIRMED' if req_6_cisd_confirmed else 'WAITING'} ({cisd_info['label']})",
+            "6. 1min CISD Confirmed": f"{'CONFIRMED' if req_6_cisd_confirmed else ('INVALIDATED' if is_invalidated else 'WAITING')} ({cisd_info['label']})",
             "7. 1min IFVG Confirmed": f"{'CONFIRMED' if req_7_ifvg_confirmed else 'WAITING'} ({ifvg_info['label']})",
             "8. Minimum 1:2 R:R": f"{'PASS' if req_8_rr_valid else 'FAIL'} (1:{calculated_rr:.2f} R:R Target)",
             "9. Setup Grade & Action": f"Grade {grade} [{req_count}/8 Req, {bonus_count}/4 Bonus] -> {action} ({size})",
@@ -795,12 +884,14 @@ class PraveenStrategy(BaseStrategy):
             "14. Execution & Goat Safe": "SAFE ($2.50 Risk | 1:2+ R:R | <15% Cap)"
         }
 
-        # Notification Trigger Rules (Page 6)
-        is_alert_grade = (grade in ["A+", "A"])
+        # Notification Trigger Rules (Page 6: grade === 'A+' || grade === 'A')
+        is_alert_grade = (grade in ["A+", "A"]) and not is_invalidated
         decision = f"{'Buy' if is_bullish else 'Sell'} limit" if is_alert_grade else "Wait / No trade"
 
         if is_alert_grade:
             reason = f"🎯 Grade {grade} SETUP - {symbol} | {bias_info['bias']} Signal | Entry: {entry_price} | SL: {sl_price} | TP: {tp_price} | R:R: 1:{calculated_rr:.2f}"
+        elif is_invalidated:
+            reason = invalidation_reason
         else:
             if not req_1_kz_active:
                 reason = f"Outside Kill Zones. Next session: London (11:30 AM IST) / NY (4:30 PM IST). Grade {grade}."
@@ -820,13 +911,23 @@ class PraveenStrategy(BaseStrategy):
             order_ticket = build_order_ticket(
                 order_type=f"{'BUY' if is_bullish else 'SELL'} LIMIT ({grade} SETUP)",
                 symbol=symbol,
+                strategy_name=self.name,
                 entry_price=entry_price,
                 stop_loss=sl_price,
                 take_profit=tp_price,
                 account_balance=account_bal,
                 risk_per_trade=risk_dollars,
-                cancel_if=f"Price closes a candle body beyond the swing {'low' if is_bullish else 'high'} ({sl_price}) that created the CISD - trade is invalidated immediately.",
-                min_rr=min_rr
+                cancel_if=f"Price closes a candle body beyond the swing {'low' if is_bullish else 'high'} ({cisd_extreme}) that created the CISD — trade is invalidated immediately.",
+                min_rr=min_rr,
+                extra_fields={
+                    "Grade": grade,
+                    "Action": action,
+                    "Position Size": size,
+                    "Kill Zone": kz["name"],
+                    "DOL Target": dol_info["label"],
+                    "SMT Divergence": smt_eval["label"],
+                    "SSMT Divergence": ssmt_eval["label"]
+                }
             )
 
         return {
