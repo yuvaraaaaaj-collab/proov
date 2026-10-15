@@ -268,10 +268,6 @@ def send_whatsapp_callmebot(phones: List[str], apikey: str, text: str) -> Dict[s
 
 # Instant Trade Alert Dispatcher (Zero delay, non-blocking background task)
 async def dispatch_trade_alert(symbol: str, strategy_name: str, eval_data: Dict[str, Any], current_price: float):
-    # Strictly disable notification push for Session Momentum Breakout
-    if "session momentum breakout" in str(strategy_name).lower() or "session_breakout" in str(strategy_name).lower():
-        logger.info(f"Notification push is disabled for {strategy_name}.")
-        return
 
     # Enforce non-empty order ticket before dispatching any VIP alert
     ticket = eval_data.get("order_ticket")

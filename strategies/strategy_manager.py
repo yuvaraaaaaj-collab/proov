@@ -1,26 +1,20 @@
 from typing import Dict, List, Any, Optional
 from .base_strategy import BaseStrategy
 from .smc_liquidity_master import SMCLiquidityMasterStrategy
-from .silver_bullet import ICTSilverBulletStrategy
 from .praveen_strategy import PraveenStrategy
-from .spean_strategy import SPEANStrategy
-from .ict_market_maker import ICTMarketMakerStrategy
 
 class StrategyManager:
     """
     Registry that manages all active and available strategies.
-    Supports dynamic registration of custom strategies at runtime.
+    Retains only SMC Liquidity Master and Praveen's ICT Strategy v2.1.
     """
     def __init__(self):
         self._strategies: Dict[str, BaseStrategy] = {}
         self._active_strategy_id: str = "smc_master"
         
-        # Register default built-in strategies
+        # Register built-in strategies
         self.register_strategy("smc_master", SMCLiquidityMasterStrategy())
-        self.register_strategy("ict_market_maker", ICTMarketMakerStrategy())
         self.register_strategy("praveen_strategy", PraveenStrategy())
-        self.register_strategy("spean_strategy", SPEANStrategy())
-        self.register_strategy("silver_bullet", ICTSilverBulletStrategy())
 
     def register_strategy(self, strategy_id: str, strategy_instance: BaseStrategy):
         self._strategies[strategy_id] = strategy_instance

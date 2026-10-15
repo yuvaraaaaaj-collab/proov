@@ -51,10 +51,4 @@ for sid, res in results.items():
     assert "decision" in res
     assert "checklist" in res
 
-print("\n5. Testing Session Breakout Strategy standalone...")
-from strategies.session_breakout import SessionBreakoutStrategy
-sb = SessionBreakoutStrategy()
-sb_res = sb.evaluate(dummy_md, account_cfg)
-print(f"Strategy [session_breakout]: decision = '{sb_res.get('decision')}'")
-
 print("\nSUCCESS! All strategies evaluated without errors.")

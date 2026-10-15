@@ -440,7 +440,7 @@ async def market_scanner_loop():
                     strat_name = eval_result.get("strategy", strat_id)
                     
                     # Persist valid ticket with fixed created_at (NEVER overwrite timestamp on every tick!)
-                    if has_valid_ticket and strat_id != "session_breakout":
+                    if has_valid_ticket:
                         cur_entry = float(ticket.get("Entry Price") or ticket.get("Entry") or 0)
                         exist_t = last_valid_tickets.get(symbol)
                         
@@ -462,7 +462,7 @@ async def market_scanner_loop():
                         }
                     
                     # Setup-Key based Alert Trigger: fires INSTANTLY on new setup with zero delay
-                    if has_valid_ticket and current_decision not in ["Wait / No trade", None] and strat_id != "session_breakout":
+                    if has_valid_ticket and current_decision not in ["Wait / No trade", None]:
                         order_t_str = str(ticket.get("Order Type", "")).upper()
                         entry_val = float(ticket.get("Entry Price") or ticket.get("Entry") or 0)
                         sl_val = float(ticket.get("Stop Loss") or 0)
@@ -540,7 +540,6 @@ async def market_scanner_loop():
                         active_eval.get("decision") not in ["Wait / No trade", None]
                         and isinstance(active_ticket, dict)
                         and bool(active_ticket.get("Entry Price") or active_ticket.get("Entry"))
-                        and active_strat != "session_breakout"
                     )
                     active_name = active_eval.get("strategy", active_strat)
                     
