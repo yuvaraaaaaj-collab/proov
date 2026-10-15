@@ -461,20 +461,19 @@ async def market_scanner_loop():
                             "timestamp": created_at
                         }
                     
-                    # Setup-Key based Alert Trigger: fires INSTANTLY on new setup with zero delay
+                    # Setup Alert Trigger: fires INSTANTLY on new setup with zero delay
                     if has_valid_ticket and current_decision not in ["Wait / No trade", None]:
                         order_t_str = str(ticket.get("Order Type", "")).upper()
                         entry_val = float(ticket.get("Entry Price") or ticket.get("Entry") or 0)
-                        sl_val = float(ticket.get("Stop Loss") or 0)
-                        tp_val = float(ticket.get("Take Profit") or 0)
-                        setup_key = f"{symbol}_{strat_id}_{order_t_str}_{round(entry_val, 2)}_{round(sl_val, 2)}_{round(tp_val, 2)}"
+                        now_t = time.time()
+                        last_sent = dispatched_setups.get(f"{symbol}_{strat_id}_{order_t_str}", 0.0)
                         
-                        last_sent = dispatched_setups.get(setup_key, 0.0)
-                        is_new_alert = (time.time() - last_sent) > 1800  # 30 mins debounce for identical setup
+                        # Debounce identical setup per symbol & strategy (15 mins) or if decision flipped
+                        is_new_alert = (now_t - last_sent > 900) or (prev_decision != current_decision)
                         
                         if is_new_alert:
-                            dispatched_setups[setup_key] = time.time()
-                            print(f"[Instant Alert Trigger] Symbol: {symbol} | Strategy: {strat_name} | Key: {setup_key}")
+                            dispatched_setups[f"{symbol}_{strat_id}_{order_t_str}"] = now_t
+                            print(f"[Instant Alert Trigger] Symbol: {symbol} | Strategy: {strat_name} | {order_t_str} @ {entry_val}")
                             
                             # 1. Dispatch background alerts: Telegram, WhatsApp, etc.
                             asyncio.create_task(dispatch_trade_alert(
