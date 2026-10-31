@@ -119,6 +119,7 @@ def format_telegram_message(symbol: str, strategy_name: str, eval_data: Dict[str
 
     emoji = "🟢" if "buy" in decision.lower() else "🔴"
 
+    app_url = os.environ.get("APP_URL", "https://traderpro-app-production.up.railway.app").rstrip("/")
     msg = (
         f"{emoji} <b>TRADERPRO VIP ALERT: {order_type}</b>\n\n"
         f"<b>Asset:</b> {symbol} (Capital.com)\n"
@@ -134,7 +135,7 @@ def format_telegram_message(symbol: str, strategy_name: str, eval_data: Dict[str
         f"💵 <b>Target Gain:</b> {gain}\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"💡 <i>{reason}</i>\n\n"
-        f"👉 <a href=\"https://traderpro-app-production.up.railway.app\">Open TraderPro Terminal</a>"
+        f"👉 <a href=\"{app_url}\">Open TraderPro Terminal</a>"
     )
     return msg
 
@@ -147,6 +148,7 @@ def format_plain_message(symbol: str, strategy_name: str, eval_data: Dict[str, A
     tp = ticket.get("Take Profit", "---")
     rr = ticket.get("R:R", "1:2+")
     risk = ticket.get("Risk Amount", "$2.50")
+    app_url = os.environ.get("APP_URL", "https://traderpro-app-production.up.railway.app").rstrip("/")
     
     msg = (
         f"🚨 TRADERPRO VIP: {order_type} on {symbol}\n"
@@ -155,7 +157,7 @@ def format_plain_message(symbol: str, strategy_name: str, eval_data: Dict[str, A
         f"SL: {sl}\n"
         f"TP: {tp}\n"
         f"R:R: {rr} | Risk: {risk}\n"
-        f"Open App: https://traderpro-app-production.up.railway.app"
+        f"Open App: {app_url}"
     )
     return msg
 
