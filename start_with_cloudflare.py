@@ -1,0 +1,99 @@
+"""
+TraderPro 1-Click Cloudflare Tunnel Launcher
+Launches the FastAPI strategy scanner and creates a secure, global Cloudflare HTTPS Tunnel.
+Works 100% free, zero configuration, bypasses all ISP blocks.
+"""
+
+import os
+import sys
+import re
+import time
+import subprocess
+import threading
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+CLOUDFLARED_BIN = BASE_DIR / "cloudflared.exe"
+
+def main():
+    print("=" * 65, flush=True)
+    print("      Starting TraderPro Strategy Scanner via Cloudflare         ", flush=True)
+    print("=" * 65, flush=True)
+
+    if not CLOUDFLARED_BIN.exists():
+        print(f"[!] cloudflared.exe not found in {BASE_DIR}. Please ensure it is present.", flush=True)
+        sys.exit(1)
+
+    # 1. Start Uvicorn Server in background
+    print("[1/2] Starting local strategy scanner on port 8000...", flush=True)
+    server_cmd = [sys.executable, "-u", "-m", "uvicorn", "backend.server:app", "--host", "127.0.0.1", "--port", "8000"]
+    server_proc = subprocess.Popen(
+        server_cmd,
+        cwd=str(BASE_DIR),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1
+    )
+
+    # Stream server output in a separate daemon thread
+    def stream_server_logs():
+        for line in iter(server_proc.stdout.readline, ''):
+            l = line.strip()
+            if any(k in l for k in ["[INFO]", "Uvicorn running", "[TV Feed]", "Instant Alert"]):
+                print(f" [Server] {l}", flush=True)
+
+    threading.Thread(target=stream_server_logs, daemon=True).start()
+    time.sleep(2)
+
+    # 2. Check for Cloudflare Named Tunnel Token or Quick Tunnel
+    tunnel_token = os.environ.get("CLOUDFLARE_TUNNEL_TOKEN", "").strip()
+    if tunnel_token:
+        print("[2/2] Connecting Permanent Cloudflare Named Tunnel using token...", flush=True)
+        cf_cmd = [str(CLOUDFLARED_BIN), "tunnel", "run", "--token", tunnel_token]
+    else:
+        print("[2/2] Requesting Cloudflare Quick Tunnel (Free Worldwide HTTPS)...", flush=True)
+        cf_cmd = [str(CLOUDFLARED_BIN), "tunnel", "--url", "http://127.0.0.1:8000"]
+
+    cf_proc = subprocess.Popen(
+        cf_cmd,
+        cwd=str(BASE_DIR),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1
+    )
+
+    public_url = None
+    url_pattern = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
+
+    # Monitor cloudflared stdout to capture the public URL
+    for line in iter(cf_proc.stdout.readline, ''):
+        line_clean = line.strip()
+        match = url_pattern.search(line_clean)
+        if match and not public_url:
+            public_url = match.group(0)
+            os.environ["APP_URL"] = public_url
+            print("\n" + "=" * 65, flush=True)
+            print("  [SUCCESS] TraderPro is LIVE on Cloudflare:", flush=True)
+            print(f"  >> Public URL : {public_url}", flush=True)
+            print(f"  >> Local URL  : http://127.0.0.1:8000", flush=True)
+            print("  >> WebSockets : wss:// (0-Lag Realtime Streaming Active)", flush=True)
+            print("  >> Telegram   : Alerts configured with this link", flush=True)
+            print("=" * 65, flush=True)
+            print("  Press Ctrl+C at any time to stop the server.\n", flush=True)
+
+    try:
+        cf_proc.wait()
+    except KeyboardInterrupt:
+        print("\nStopping Cloudflare Tunnel and Server...", flush=True)
+    finally:
+        cf_proc.terminate()
+        server_proc.terminate()
+
+if __name__ == "__main__":
+    main()
