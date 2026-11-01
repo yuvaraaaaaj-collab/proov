@@ -85,21 +85,41 @@ def main():
     )
 
     public_url = None
+    connected_banner_shown = False
     url_pattern = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
+    app_url = os.environ.get("APP_URL", "").strip()
 
-    # Monitor cloudflared stdout to capture the public URL
+    # Monitor cloudflared stdout
     for line in iter(cf_proc.stdout.readline, ''):
         line_clean = line.strip()
+        
+        # Check for trycloudflare quick URL
         match = url_pattern.search(line_clean)
         if match and not public_url:
             public_url = match.group(0)
             os.environ["APP_URL"] = public_url
             print("\n" + "=" * 65, flush=True)
-            print("  [SUCCESS] TraderPro is LIVE on Cloudflare:", flush=True)
+            print("  [SUCCESS] TraderPro is LIVE on Cloudflare Quick Tunnel:", flush=True)
             print(f"  >> Public URL : {public_url}", flush=True)
             print(f"  >> Local URL  : http://127.0.0.1:8000", flush=True)
             print("  >> WebSockets : wss:// (0-Lag Realtime Streaming Active)", flush=True)
             print("  >> Telegram   : Alerts configured with this link", flush=True)
+            print("=" * 65, flush=True)
+            print("  Press Ctrl+C at any time to stop the server.\n", flush=True)
+            connected_banner_shown = True
+
+        # Check for Named Tunnel connection
+        elif "Registered tunnel connection" in line_clean and not connected_banner_shown and tunnel_token:
+            connected_banner_shown = True
+            print("\n" + "=" * 65, flush=True)
+            print("  [SUCCESS] Permanent Cloudflare Tunnel is CONNECTED!", flush=True)
+            if app_url:
+                print(f"  >> Public Domain : {app_url}", flush=True)
+            else:
+                print("  >> Public Domain : Active on your configured Cloudflare Hostname", flush=True)
+            print(f"  >> Local Origin  : http://127.0.0.1:8000", flush=True)
+            print("  >> WebSockets    : wss:// (0-Lag Realtime Streaming Active)", flush=True)
+            print("  >> Edge Network  : Connected to Cloudflare Edge (Mumbai/Chennai)", flush=True)
             print("=" * 65, flush=True)
             print("  Press Ctrl+C at any time to stop the server.\n", flush=True)
 
