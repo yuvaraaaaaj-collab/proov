@@ -14,8 +14,24 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 CLOUDFLARED_BIN = BASE_DIR / "cloudflared.exe"
+ENV_FILE = BASE_DIR / ".env"
+
+def load_dotenv():
+    if ENV_FILE.exists():
+        try:
+            with open(ENV_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k_clean = k.strip()
+                        v_clean = v.strip().strip('"').strip("'")
+                        os.environ[k_clean] = v_clean
+        except Exception:
+            pass
 
 def main():
+    load_dotenv()
     print("=" * 65, flush=True)
     print("      Starting TraderPro Strategy Scanner via Cloudflare         ", flush=True)
     print("=" * 65, flush=True)
